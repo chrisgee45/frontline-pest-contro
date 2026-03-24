@@ -120,6 +120,10 @@ app.post('/api/contact', (req, res) => {
   // Log activity
   addActivity('lead', `New lead from ${name} (${service || 'General'})`);
 
+  // Send email notification (async — don't block response)
+  const { sendLeadNotification } = require('./email');
+  sendLeadNotification(lead).catch(err => console.error('Lead email error:', err));
+
   res.json({ success: true, message: 'Thank you! We will contact you shortly.' });
 });
 
@@ -266,9 +270,31 @@ app.patch('/api/admin/invoices/:id', auth, (req, res) => {
     inv.status = req.body.status;
     if (req.body.status === 'paid') {
       inv.paidAt = new Date().toISOString();
-      // Auto-add income transaction
+      // Auto-add income transaction (simple system)
       addTransaction('income', inv.total, `Invoice ${inv.invoiceNumber} — ${inv.customerName}`, 'Service Revenue', inv.id);
       addActivity('invoice', `Invoice ${inv.invoiceNumber} marked as paid — $${inv.total.toFixed(2)}`);
+
+      // Auto-post to double-entry accounting ledger
+      try {
+        const acct = require('./accounting');
+        // Determine revenue account based on service type
+        let revenueCode = '4000'; // Default: Pest Control
+        const serviceType = (inv.items?.[0]?.description || '').toLowerCase();
+        if (serviceType.includes('termite')) revenueCode = '4010';
+        else if (serviceType.includes('inspect')) revenueCode = '4020';
+        const revenueAcct = acct.getAccountByCode(revenueCode);
+        if (revenueAcct) {
+          acct.recordRevenue({
+            amount: inv.total,
+            revenueAccountId: revenueAcct.id,
+            paymentMethod: 'cash',
+            memo: `Invoice ${inv.invoiceNumber} — ${inv.customerName}`,
+            date: inv.paidAt,
+          });
+        }
+      } catch (e) {
+        console.error('Failed to post invoice to accounting ledger:', e.message);
+      }
     } else {
       addActivity('invoice', `Invoice ${inv.invoiceNumber} status → ${req.body.status}`);
     }
