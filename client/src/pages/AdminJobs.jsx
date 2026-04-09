@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Plus, X, MapPin, Phone, Calendar, User, Wrench, GripVertical, Trash2, FileText } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { Plus, X, MapPin, Phone, Calendar, User, Trash2, FileText, UserCheck } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatDate } from '../hooks/useAdmin'
 
@@ -13,13 +13,18 @@ const COLUMNS = [
 
 const SERVICE_TYPES = ['Termite Treatment', 'General Pest Control', 'Rodent Control', 'Inspection', 'Other']
 
-function JobCard({ job, onStatusChange, onDelete, onCreateInvoice }) {
-  const [expanded, setExpanded] = useState(false)
-
+function JobCard({ job, expanded, onToggle, onStatusChange, onDelete, onCreateInvoice, cardRef, highlight }) {
   return (
-    <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-3 cursor-pointer hover:shadow-md transition-shadow" onClick={() => setExpanded(!expanded)}>
+    <div
+      ref={cardRef}
+      className={`bg-white rounded-lg border shadow-sm p-3 cursor-pointer hover:shadow-md transition-all ${highlight ? 'border-forest-500 ring-2 ring-forest-200' : 'border-gray-200'}`}
+      onClick={onToggle}
+    >
       <div className="flex items-start justify-between mb-2">
         <span className="text-xs font-semibold text-forest-700 bg-forest-50 px-2 py-0.5 rounded">{job.serviceType}</span>
+        {job.leadId && !expanded && (
+          <span title="Converted from a lead" className="text-xs text-green-700"><UserCheck size={12} /></span>
+        )}
       </div>
       <h4 className="font-semibold text-sm text-charcoal-900 mb-1">{job.customerName}</h4>
       {job.address && <p className="text-xs text-gray-500 flex items-center gap-1 mb-1"><MapPin size={11} />{job.address}</p>}
@@ -28,6 +33,13 @@ function JobCard({ job, onStatusChange, onDelete, onCreateInvoice }) {
 
       {expanded && (
         <div className="mt-3 pt-3 border-t border-gray-100 space-y-2" onClick={e => e.stopPropagation()}>
+          {job.leadId && (
+            <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-green-50 border border-green-200">
+              <UserCheck size={11} className="text-green-700" />
+              <span className="text-[11px] text-green-900">Converted from a lead</span>
+              <Link to={`/admin/leads?focus=${job.leadId}`} className="ml-auto text-[10px] font-semibold text-green-700 hover:text-green-900 underline">View Lead →</Link>
+            </div>
+          )}
           {job.phone && <p className="text-xs flex items-center gap-1"><Phone size={11} className="text-gray-400" /><a href={`tel:${job.phone}`} className="text-forest-700 hover:underline">{job.phone}</a></p>}
           {job.notes && <p className="text-xs text-gray-600 bg-gray-50 rounded p-2">{job.notes}</p>}
           <div className="flex flex-wrap gap-1 pt-1">
@@ -39,7 +51,7 @@ function JobCard({ job, onStatusChange, onDelete, onCreateInvoice }) {
             {job.status === 'completed' && (
               <button onClick={() => onCreateInvoice(job)} className="flex items-center gap-1 text-[10px] text-forest-700 font-medium hover:underline"><FileText size={11} />Create Invoice</button>
             )}
-            <button onClick={() => { if (confirm('Delete this job?')) onDelete(job.id) }} className="flex items-center gap-1 text-[10px] text-red-600 font-medium hover:underline"><Trash2 size={11} />Delete</button>
+            <button onClick={() => { if (confirm('Delete this job?')) onDelete(job.id) }} className="flex items-center gap-1 text-[10px] text-red-600 font-medium hover:underline ml-auto"><Trash2 size={11} />Delete</button>
           </div>
         </div>
       )}
@@ -87,7 +99,12 @@ export default function AdminJobs() {
   const [jobs, setJobs] = useState([])
   const [showNew, setShowNew] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [expandedId, setExpandedId] = useState(null)
+  const [highlightedId, setHighlightedId] = useState(null)
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusId = searchParams.get('focus')
+  const focusedRef = useRef(null)
 
   const fetchJobs = useCallback(async () => {
     if (!getToken()) { navigate('/admin'); return }
@@ -97,6 +114,24 @@ export default function AdminJobs() {
   }, [navigate])
 
   useEffect(() => { fetchJobs() }, [fetchJobs])
+
+  // Auto-expand the focused job and scroll it into view after the kanban
+  // mounts. Clears the query param so a refresh doesn't re-scroll. The
+  // highlight ring is held for 2.5s via local state so the user can see it
+  // even after the URL is cleaned.
+  useEffect(() => {
+    if (!focusId || jobs.length === 0) return
+    const job = jobs.find(j => j.id === focusId)
+    if (!job) return
+    setExpandedId(focusId)
+    setHighlightedId(focusId)
+    setTimeout(() => {
+      focusedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+    setSearchParams({}, { replace: true })
+    const fade = setTimeout(() => setHighlightedId(null), 2500)
+    return () => clearTimeout(fade)
+  }, [focusId, jobs, setSearchParams])
 
   const createJob = async (form) => { await adminFetch('/api/admin/jobs', { method: 'POST', body: JSON.stringify(form) }); fetchJobs() }
   const updateStatus = async (id, status) => { await adminFetch(`/api/admin/jobs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); fetchJobs() }
@@ -128,7 +163,17 @@ export default function AdminJobs() {
                 {colJobs.length === 0 ? (
                   <div className="text-center py-8 text-xs text-gray-400">No jobs</div>
                 ) : colJobs.map(job => (
-                  <JobCard key={job.id} job={job} onStatusChange={updateStatus} onDelete={deleteJob} onCreateInvoice={createInvoice} />
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    expanded={expandedId === job.id}
+                    onToggle={() => setExpandedId(expandedId === job.id ? null : job.id)}
+                    onStatusChange={updateStatus}
+                    onDelete={deleteJob}
+                    onCreateInvoice={createInvoice}
+                    cardRef={job.id === focusId ? focusedRef : undefined}
+                    highlight={job.id === highlightedId}
+                  />
                 ))}
               </div>
             </div>
