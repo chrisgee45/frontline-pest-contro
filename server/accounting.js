@@ -1,16 +1,6 @@
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
-
-const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-
-function dataFile(name) { return path.join(DATA_DIR, `${name}.json`); }
-function readJSON(name, fallback) {
-  try { const f = dataFile(name); if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
-  return fallback;
-}
-function writeJSON(name, data) { fs.writeFileSync(dataFile(name), JSON.stringify(data, null, 2)); }
+const { readJSON, writeJSON } = require('./data-dir');
+const { recordAudit } = require('./audit-helpers');
 
 // ==========================================
 // CHART OF ACCOUNTS (Double-Entry System)
@@ -630,31 +620,22 @@ function saveQuarterlyPayment(data) {
 }
 
 // ==========================================
-// AUDIT LOG
+// AUDIT LOG (delegates to audit-helpers for a single source of truth)
 // ==========================================
 function addAuditEntry(action, recordType, recordId, amount, description, performedBy) {
-  const logs = readJSON('audit_log', []);
-  logs.unshift({
-    id: crypto.randomUUID(),
-    action, recordType, recordId,
-    amount: amount ? parseFloat(amount).toFixed(2) : null,
-    description, performedBy: performedBy || 'admin',
-    performedAt: new Date().toISOString(),
+  recordAudit({
+    action,
+    recordType,
+    recordId,
+    amount,
+    description,
+    actor: performedBy,
   });
-  if (logs.length > 500) logs.length = 500;
-  writeJSON('audit_log', logs);
 }
 
 function getAuditLogs(filters) {
-  let logs = readJSON('audit_log', []);
-  if (filters?.startDate) logs = logs.filter(l => l.performedAt >= filters.startDate);
-  if (filters?.endDate) logs = logs.filter(l => l.performedAt <= filters.endDate + 'T23:59:59');
-  if (filters?.action) logs = logs.filter(l => l.action === filters.action);
-  if (filters?.recordType) logs = logs.filter(l => l.recordType === filters.recordType);
-  const total = logs.length;
-  const limit = filters?.limit || 100;
-  const offset = filters?.offset || 0;
-  return { logs: logs.slice(offset, offset + limit), total };
+  const { queryAudit } = require('./audit-helpers');
+  return queryAudit(filters || {});
 }
 
 // Initialize accounts on load
