@@ -116,9 +116,7 @@ export default function AdminJobs() {
   useEffect(() => { fetchJobs() }, [fetchJobs])
 
   // Auto-expand the focused job and scroll it into view after the kanban
-  // mounts. Clears the query param so a refresh doesn't re-scroll. The
-  // highlight ring is held for 2.5s via local state so the user can see it
-  // even after the URL is cleaned.
+  // mounts. Clears the query param so a refresh doesn't re-scroll.
   useEffect(() => {
     if (!focusId || jobs.length === 0) return
     const job = jobs.find(j => j.id === focusId)
@@ -129,9 +127,17 @@ export default function AdminJobs() {
       focusedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 50)
     setSearchParams({}, { replace: true })
-    const fade = setTimeout(() => setHighlightedId(null), 2500)
-    return () => clearTimeout(fade)
   }, [focusId, jobs, setSearchParams])
+
+  // Fade the highlight ring 2.5s after it's set. Kept in its own effect
+  // (keyed on highlightedId, not focusId) so the cleanup isn't torn down
+  // when setSearchParams clears focusId immediately after the highlight
+  // is applied.
+  useEffect(() => {
+    if (!highlightedId) return
+    const timer = setTimeout(() => setHighlightedId(null), 2500)
+    return () => clearTimeout(timer)
+  }, [highlightedId])
 
   const createJob = async (form) => { await adminFetch('/api/admin/jobs', { method: 'POST', body: JSON.stringify(form) }); fetchJobs() }
   const updateStatus = async (id, status) => { await adminFetch(`/api/admin/jobs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); fetchJobs() }
