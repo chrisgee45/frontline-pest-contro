@@ -588,6 +588,16 @@ if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../client/dist/index.html')));
 }
 
+// Run one-time data migrations on boot (idempotent via a marker file).
+// Must run after all routes are registered but before listen, so HTTP
+// requests can't interleave with migration writes.
+const { runMigrations } = require('./migrations');
+try {
+  runMigrations();
+} catch (e) {
+  console.error('[migrations] runMigrations threw:', e);
+}
+
 // Only listen when run directly — lets integration tests require this module
 // without starting a server on the real port.
 if (require.main === module) {
