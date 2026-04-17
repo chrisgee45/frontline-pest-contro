@@ -1,18 +1,218 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, CheckCircle, DollarSign, FileText, Printer, Briefcase } from 'lucide-react'
+import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
+// Status map keyed on the server's effectiveStatus. 'partial' is new in
+// Phase 1.3 — an invoice has received some payments but not the full
+// balance yet.
 const STATUS_MAP = {
   draft: { label: 'Draft', color: 'bg-gray-100 text-gray-700' },
   sent: { label: 'Sent', color: 'bg-blue-100 text-blue-800' },
+  partial: { label: 'Partial', color: 'bg-amber-100 text-amber-800' },
   paid: { label: 'Paid', color: 'bg-green-100 text-green-800' },
   overdue: { label: 'Overdue', color: 'bg-red-100 text-red-800' },
 }
 
-function InvoiceRow({ inv, expanded, onToggle, onUpdate, onDelete, cardRef, highlight }) {
-  const s = STATUS_MAP[inv.status] || STATUS_MAP.draft
+const PAYMENT_METHODS = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'check', label: 'Check' },
+  { value: 'card', label: 'Card' },
+  { value: 'ach', label: 'ACH / Bank Transfer' },
+  { value: 'other', label: 'Other' },
+]
+
+// Small modal to record a payment against an invoice. Defaults amount to
+// the current remaining balance so the common case (paying in full) is
+// one-click.
+function RecordPaymentModal({ invoice, onClose, onSaved }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [amount, setAmount] = useState(String(invoice.balance ?? invoice.total ?? 0))
+  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [paymentDate, setPaymentDate] = useState(today)
+  const [referenceNumber, setReferenceNumber] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+    const parsed = parseFloat(amount)
+    if (!parsed || parsed <= 0) {
+      setError('Amount must be a positive number')
+      setSaving(false)
+      return
+    }
+    const res = await adminFetch(`/api/admin/invoices/${invoice.id}/payments`, {
+      method: 'POST',
+      body: JSON.stringify({
+        amount: parsed,
+        paymentMethod,
+        paymentDate,
+        referenceNumber: referenceNumber.trim(),
+        notes: notes.trim(),
+      }),
+    })
+    setSaving(false)
+    if (res && res.success) {
+      onSaved(res.invoice)
+      onClose()
+    } else {
+      setError((res && res.error) || 'Failed to record payment')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b">
+          <div>
+            <h3 className="font-display font-bold text-lg">Record Payment</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{invoice.invoiceNumber} — {invoice.customerName}</p>
+          </div>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
+            <div className="flex justify-between"><span className="text-gray-500">Total</span><span>{formatCurrency(invoice.total)}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Already Paid</span><span>{formatCurrency(invoice.paidAmount || 0)}</span></div>
+            <div className="flex justify-between font-semibold border-t border-gray-200 pt-1 mt-1"><span>Remaining</span><span>{formatCurrency(invoice.balance ?? invoice.total)}</span></div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Amount *</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              required
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Method</label>
+              <select
+                value={paymentMethod}
+                onChange={e => setPaymentMethod(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-forest-500 outline-none"
+              >
+                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+              <input
+                type="date"
+                value={paymentDate}
+                onChange={e => setPaymentDate(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Reference / Check #</label>
+            <input
+              value={referenceNumber}
+              onChange={e => setReferenceNumber(e.target.value)}
+              placeholder="Optional"
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Notes</label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={2}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none resize-none"
+            />
+          </div>
+          {error && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{error}</p>}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 btn-primary py-2.5 disabled:opacity-50"
+            >
+              {saving ? 'Recording...' : 'Record Payment'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Renders the payment history list + void-payment affordance, including
+// a small running "remaining balance" summary.
+function PaymentHistory({ invoice, onVoidPayment }) {
+  const payments = invoice.payments || []
+
+  if (payments.length === 0) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 text-center">
+        No payments recorded yet
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-600">
+        Payment History ({payments.length})
+      </div>
+      <div className="divide-y divide-gray-100">
+        {payments.map(p => (
+          <div key={p.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+            <CircleDollarSign size={14} className="text-green-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="font-medium">{formatCurrency(Number(p.amount))}
+                <span className="ml-2 text-xs text-gray-500 capitalize">({p.paymentMethod})</span>
+              </div>
+              <div className="text-xs text-gray-400 flex items-center gap-2">
+                <Calendar size={10} />{formatDate(p.paymentDate)}
+                {p.referenceNumber && <span className="truncate">Ref: {p.referenceNumber}</span>}
+              </div>
+              {p.notes && <div className="text-xs text-gray-500 mt-0.5">{p.notes}</div>}
+            </div>
+            <button
+              onClick={() => {
+                if (confirm(`Void this $${Number(p.amount).toFixed(2)} payment? A reversal entry will be posted to accounting — the original won't be deleted from the audit trail.`)) {
+                  onVoidPayment(p.id)
+                }
+              }}
+              className="text-red-400 hover:text-red-600 p-1"
+              title="Void payment"
+            >
+              <Ban size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function InvoiceRow({ inv, expanded, onToggle, onMarkSent, onDelete, onOpenPaymentModal, onVoidPayment, cardRef, highlight }) {
+  // Display everything from the server-enriched effectiveStatus, paidAmount
+  // and balance — these are computed on read so partial/paid/overdue always
+  // reflect the actual payment state.
+  const effective = inv.effectiveStatus || inv.status || 'draft'
+  const s = STATUS_MAP[effective] || STATUS_MAP.draft
+  const canMarkSent = inv.baseStatus === 'draft'
+  const canRecordPayment = (inv.balance ?? inv.total) > 0.005 && effective !== 'draft'
 
   return (
     <div
@@ -30,6 +230,9 @@ function InvoiceRow({ inv, expanded, onToggle, onUpdate, onDelete, cardRef, high
         <div className="flex items-center gap-4 shrink-0">
           <div className="text-right hidden sm:block">
             <div className="font-display font-bold text-charcoal-900">{formatCurrency(inv.total)}</div>
+            {inv.balance > 0.005 && effective !== 'draft' && (
+              <div className="text-xs text-amber-600 font-medium">{formatCurrency(inv.balance)} remaining</div>
+            )}
             <div className="text-xs text-gray-400">{formatDate(inv.createdAt)}</div>
           </div>
           {expanded ? <ChevronUp size={18} className="text-gray-400" /> : <ChevronDown size={18} className="text-gray-400" />}
@@ -51,27 +254,57 @@ function InvoiceRow({ inv, expanded, onToggle, onUpdate, onDelete, cardRef, high
           )}
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
-              <thead><tr className="bg-gray-50 text-left"><th className="px-3 py-2 text-xs font-medium text-gray-500">Item</th><th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Qty</th><th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Rate</th><th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Amount</th></tr></thead>
+              <thead>
+                <tr className="bg-gray-50 text-left">
+                  <th className="px-3 py-2 text-xs font-medium text-gray-500">Item</th>
+                  <th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Qty</th>
+                  <th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Rate</th>
+                  <th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Amount</th>
+                </tr>
+              </thead>
               <tbody>
                 {inv.items.map((item, i) => (
-                  <tr key={i} className="border-t border-gray-100"><td className="px-3 py-2">{item.description}</td><td className="px-3 py-2 text-right">{item.quantity}</td><td className="px-3 py-2 text-right">{formatCurrency(item.rate)}</td><td className="px-3 py-2 text-right font-medium">{formatCurrency(item.quantity * item.rate)}</td></tr>
+                  <tr key={i} className="border-t border-gray-100">
+                    <td className="px-3 py-2">{item.description}</td>
+                    <td className="px-3 py-2 text-right">{item.quantity}</td>
+                    <td className="px-3 py-2 text-right">{formatCurrency(item.rate)}</td>
+                    <td className="px-3 py-2 text-right font-medium">{formatCurrency(item.quantity * item.rate)}</td>
+                  </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Subtotal</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.subtotal)}</td></tr>
                 <tr><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Tax (8.5%)</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.tax)}</td></tr>
                 <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-2 text-right font-semibold">Total</td><td className="px-3 py-2 text-right font-display font-bold text-lg">{formatCurrency(inv.total)}</td></tr>
+                {inv.paidAmount > 0 && (
+                  <>
+                    <tr className="border-t border-gray-100"><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-green-600">Paid</td><td className="px-3 py-1.5 text-right text-sm text-green-600">{formatCurrency(inv.paidAmount)}</td></tr>
+                    <tr className="border-t border-gray-200 bg-gray-50"><td colSpan="3" className="px-3 py-2 text-right font-semibold text-amber-700">Balance</td><td className="px-3 py-2 text-right font-display font-bold text-lg text-amber-700">{formatCurrency(inv.balance)}</td></tr>
+                  </>
+                )}
               </tfoot>
             </table>
           </div>
+
+          <PaymentHistory invoice={inv} onVoidPayment={onVoidPayment} />
+
           {inv.notes && <p className="text-sm text-gray-600">{inv.notes}</p>}
           {inv.dueDate && <p className="text-xs text-gray-500">Due: {formatDate(inv.dueDate)}</p>}
-          {inv.paidAt && <p className="text-xs text-green-600 font-medium">Paid on {formatDate(inv.paidAt)}</p>}
+
           <div className="flex flex-wrap gap-2 pt-2">
-            {inv.status === 'draft' && <button onClick={() => onUpdate(inv.id, 'sent')} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700"><Send size={12} />Mark as Sent</button>}
-            {(inv.status === 'sent' || inv.status === 'overdue') && <button onClick={() => onUpdate(inv.id, 'paid')} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700"><CheckCircle size={12} />Mark as Paid</button>}
-            {inv.status === 'sent' && <button onClick={() => onUpdate(inv.id, 'overdue')} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-700 text-xs font-medium rounded-lg hover:bg-red-200">Mark Overdue</button>}
-            <button onClick={() => { if (confirm('Delete this invoice?')) onDelete(inv.id) }} className="flex items-center gap-1.5 px-3 py-1.5 text-red-600 text-xs font-medium hover:bg-red-50 rounded-lg"><Trash2 size={12} />Delete</button>
+            {canMarkSent && (
+              <button onClick={() => onMarkSent(inv.id)} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700">
+                <Send size={12} />Mark as Sent
+              </button>
+            )}
+            {canRecordPayment && (
+              <button onClick={() => onOpenPaymentModal(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700">
+                <DollarSign size={12} />Record Payment
+              </button>
+            )}
+            <button onClick={() => { if (confirm('Delete this invoice?')) onDelete(inv.id) }} className="flex items-center gap-1.5 px-3 py-1.5 text-red-600 text-xs font-medium hover:bg-red-50 rounded-lg ml-auto">
+              <Trash2 size={12} />Delete
+            </button>
           </div>
         </div>
       )}
@@ -143,6 +376,7 @@ function NewInvoiceModal({ onClose, onSave, prefill }) {
 export default function AdminInvoices() {
   const [invoices, setInvoices] = useState([])
   const [showNew, setShowNew] = useState(false)
+  const [paymentModalInvoice, setPaymentModalInvoice] = useState(null)
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [prefill, setPrefill] = useState(null)
@@ -177,16 +411,13 @@ export default function AdminInvoices() {
     if (!inv) return
     setExpandedId(focusId)
     setHighlightedId(focusId)
-    if (filter !== 'all' && inv.status !== filter) setFilter('all')
+    if (filter !== 'all' && inv.effectiveStatus !== filter) setFilter('all')
     setTimeout(() => {
       focusedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 50)
     setSearchParams({}, { replace: true })
   }, [focusId, invoices, filter, setSearchParams])
 
-  // Fade the highlight ring 2.5s after it's set. Separate effect keyed on
-  // highlightedId so setSearchParams doesn't tear down the fade timer
-  // (same bug fix as Commit D-fix, same pattern).
   useEffect(() => {
     if (!highlightedId) return
     const timer = setTimeout(() => setHighlightedId(null), 2500)
@@ -202,24 +433,31 @@ export default function AdminInvoices() {
     fetchInvoices()
   }
 
-  const updateStatus = async (id, status) => { await adminFetch(`/api/admin/invoices/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); fetchInvoices() }
+  const markSent = async (id) => {
+    await adminFetch(`/api/admin/invoices/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'sent' }) })
+    fetchInvoices()
+  }
   const deleteInvoice = async (id) => { await adminFetch(`/api/admin/invoices/${id}`, { method: 'DELETE' }); fetchInvoices() }
+  const voidPayment = async (paymentId) => { await adminFetch(`/api/admin/payments/${paymentId}`, { method: 'DELETE' }); fetchInvoices() }
+  const openPaymentModal = (inv) => setPaymentModalInvoice(inv)
 
-  const filtered = filter === 'all' ? invoices : invoices.filter(i => i.status === filter)
-  const totalOutstanding = invoices.filter(i => i.status === 'sent' || i.status === 'overdue').reduce((s, i) => s + i.total, 0)
-  const totalPaid = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total, 0)
+  const filtered = filter === 'all' ? invoices : invoices.filter(i => (i.effectiveStatus || i.status) === filter)
+  const totalOutstanding = invoices
+    .filter(i => i.effectiveStatus !== 'draft' && i.effectiveStatus !== 'paid')
+    .reduce((s, i) => s + Number(i.balance ?? 0), 0)
+  const totalCollected = invoices.reduce((s, i) => s + Number(i.paidAmount ?? 0), 0)
 
   return (
     <AdminLayout>
       <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center"><div className="font-display font-bold text-xl text-charcoal-900">{invoices.length}</div><div className="text-xs text-gray-500">Total Invoices</div></div>
         <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center"><div className="font-display font-bold text-xl text-amber-600">{formatCurrency(totalOutstanding)}</div><div className="text-xs text-gray-500">Outstanding</div></div>
-        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center"><div className="font-display font-bold text-xl text-green-600">{formatCurrency(totalPaid)}</div><div className="text-xs text-gray-500">Collected</div></div>
+        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-center"><div className="font-display font-bold text-xl text-green-600">{formatCurrency(totalCollected)}</div><div className="text-xs text-gray-500">Collected</div></div>
       </div>
 
       <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-        <div className="flex gap-2">
-          {['all', 'draft', 'sent', 'paid', 'overdue'].map(f => (
+        <div className="flex gap-2 flex-wrap">
+          {['all', 'draft', 'sent', 'partial', 'paid', 'overdue'].map(f => (
             <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${filter === f ? 'bg-forest-700 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'}`}>{f}</button>
           ))}
         </div>
@@ -236,8 +474,10 @@ export default function AdminInvoices() {
               inv={inv}
               expanded={expandedId === inv.id}
               onToggle={() => setExpandedId(expandedId === inv.id ? null : inv.id)}
-              onUpdate={updateStatus}
+              onMarkSent={markSent}
               onDelete={deleteInvoice}
+              onOpenPaymentModal={openPaymentModal}
+              onVoidPayment={voidPayment}
               cardRef={inv.id === focusId ? focusedRef : undefined}
               highlight={inv.id === highlightedId}
             />
@@ -246,6 +486,13 @@ export default function AdminInvoices() {
       )}
 
       {showNew && <NewInvoiceModal onClose={() => { setShowNew(false); setPrefill(null) }} onSave={createInvoice} prefill={prefill} />}
+      {paymentModalInvoice && (
+        <RecordPaymentModal
+          invoice={paymentModalInvoice}
+          onClose={() => setPaymentModalInvoice(null)}
+          onSaved={() => fetchInvoices()}
+        />
+      )}
     </AdminLayout>
   )
 }

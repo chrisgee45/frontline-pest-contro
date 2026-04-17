@@ -806,7 +806,7 @@ app.delete('/api/admin/transactions/:id', auth, (req, res) => {
 app.get('/api/admin/dashboard', auth, (req, res) => {
   const leads = leadsRepo.all();
   const jobs = jobsRepo.all();
-  const invoices = invoicesRepo.all();
+  const invoices = invoicesRepo.all().map(enrichInvoice);
   const txns = transactionsRepo.all();
 
   const today = new Date().toISOString().split('T')[0];
@@ -817,8 +817,12 @@ app.get('/api/admin/dashboard', auth, (req, res) => {
   const monthRevenue = txns.filter(t => t.type === 'income' && (t.date || '').startsWith(thisMonth)).reduce((s, t) => s + t.amount, 0);
   const monthExpenses = txns.filter(t => t.type === 'expense' && (t.date || '').startsWith(thisMonth)).reduce((s, t) => s + t.amount, 0);
 
-  const unpaidInvoices = invoices.filter(i => i.status !== 'paid' && i.status !== 'draft');
-  const outstandingAmount = unpaidInvoices.reduce((s, i) => s + i.total, 0);
+  // Outstanding is the sum of balances on invoices that are either sent,
+  // partial, or overdue — effectively anything not draft and not paid.
+  // Using balance (not total) so partially-paid invoices only contribute
+  // what's actually still owed.
+  const unpaidInvoices = invoices.filter(i => i.effectiveStatus !== 'draft' && i.effectiveStatus !== 'paid');
+  const outstandingAmount = Math.round(unpaidInvoices.reduce((s, i) => s + Number(i.balance), 0) * 100) / 100;
 
   // Monthly revenue for chart (last 6 months)
   const monthlyRevenue = [];
@@ -844,7 +848,15 @@ app.get('/api/admin/dashboard', auth, (req, res) => {
   res.json({
     leads: { total: leads.length, new: leads.filter(l => l.status === 'new').length, today: leads.filter(l => (l.createdAt || '').startsWith(today)).length },
     jobs: { total: jobs.length, new: jobs.filter(j => j.status === 'new').length, scheduled: jobs.filter(j => j.status === 'scheduled').length, inProgress: jobs.filter(j => j.status === 'in_progress').length, completed: jobs.filter(j => j.status === 'completed').length },
-    invoices: { total: invoices.length, draft: invoices.filter(i => i.status === 'draft').length, sent: invoices.filter(i => i.status === 'sent').length, paid: invoices.filter(i => i.status === 'paid').length, outstandingAmount },
+    invoices: {
+      total: invoices.length,
+      draft: invoices.filter(i => i.effectiveStatus === 'draft').length,
+      sent: invoices.filter(i => i.effectiveStatus === 'sent').length,
+      partial: invoices.filter(i => i.effectiveStatus === 'partial').length,
+      paid: invoices.filter(i => i.effectiveStatus === 'paid').length,
+      overdue: invoices.filter(i => i.effectiveStatus === 'overdue').length,
+      outstandingAmount,
+    },
     revenue: { total: totalRevenue, expenses: totalExpenses, profit: totalRevenue - totalExpenses, monthRevenue, monthExpenses, monthProfit: monthRevenue - monthExpenses },
     monthlyRevenue,
     recentActivity,
