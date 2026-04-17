@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar } from 'lucide-react'
+import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
@@ -205,13 +205,14 @@ function PaymentHistory({ invoice, onVoidPayment }) {
   )
 }
 
-function InvoiceRow({ inv, expanded, onToggle, onMarkSent, onDelete, onOpenPaymentModal, onVoidPayment, cardRef, highlight }) {
+function InvoiceRow({ inv, expanded, onToggle, onSend, onDelete, onOpenPaymentModal, onVoidPayment, cardRef, highlight }) {
   // Display everything from the server-enriched effectiveStatus, paidAmount
   // and balance — these are computed on read so partial/paid/overdue always
   // reflect the actual payment state.
   const effective = inv.effectiveStatus || inv.status || 'draft'
   const s = STATUS_MAP[effective] || STATUS_MAP.draft
-  const canMarkSent = inv.baseStatus === 'draft'
+  const isDraft = inv.baseStatus === 'draft'
+  const hasEmail = !!(inv.customerEmail && inv.customerEmail.trim())
   const canRecordPayment = (inv.balance ?? inv.total) > 0.005 && effective !== 'draft'
 
   return (
@@ -292,9 +293,25 @@ function InvoiceRow({ inv, expanded, onToggle, onMarkSent, onDelete, onOpenPayme
           {inv.dueDate && <p className="text-xs text-gray-500">Due: {formatDate(inv.dueDate)}</p>}
 
           <div className="flex flex-wrap gap-2 pt-2">
-            {canMarkSent && (
-              <button onClick={() => onMarkSent(inv.id)} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700">
-                <Send size={12} />Mark as Sent
+            {isDraft && (
+              <button
+                onClick={() => onSend(inv)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700"
+                title={hasEmail
+                  ? `Email this invoice to ${inv.customerEmail} and mark it Sent`
+                  : 'No customer email on file — will just mark as Sent'}
+              >
+                {hasEmail ? <Mail size={12} /> : <Send size={12} />}
+                Send Invoice
+              </button>
+            )}
+            {!isDraft && hasEmail && (
+              <button
+                onClick={() => onSend(inv)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100"
+                title={`Resend this invoice to ${inv.customerEmail}`}
+              >
+                <RefreshCw size={12} />Resend
               </button>
             )}
             {canRecordPayment && (
@@ -433,8 +450,32 @@ export default function AdminInvoices() {
     fetchInvoices()
   }
 
-  const markSent = async (id) => {
-    await adminFetch(`/api/admin/invoices/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'sent' }) })
+  // Send (or resend) an invoice via the new /send endpoint. Confirms the
+  // recipient so a typo doesn't result in a surprise email to the wrong
+  // address. Shows an inline summary of what happened (sent vs. marked
+  // only vs. SMTP error) so the user isn't left guessing.
+  const sendInvoice = async (inv) => {
+    const recipient = inv.customerEmail && inv.customerEmail.trim()
+    const action = inv.baseStatus === 'draft' ? 'Send' : 'Resend'
+    const prompt = recipient
+      ? `${action} invoice ${inv.invoiceNumber} to ${recipient}?`
+      : `This invoice has no customer email. Mark ${inv.invoiceNumber} as Sent anyway?`
+    if (!confirm(prompt)) return
+    const res = await adminFetch(`/api/admin/invoices/${inv.id}/send`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    if (res && res.success) {
+      if (res.emailed) {
+        alert(`Invoice ${inv.invoiceNumber} emailed to ${res.recipient}.`)
+      } else if (res.reason && /no customer email/i.test(res.reason)) {
+        alert(`Invoice ${inv.invoiceNumber} marked Sent. (No customer email on file — nothing was emailed.)`)
+      } else {
+        alert(`Invoice ${inv.invoiceNumber} marked Sent. Email was not delivered: ${res.reason}`)
+      }
+    } else {
+      alert(`Send failed: ${res?.error || 'unknown error'}`)
+    }
     fetchInvoices()
   }
   const deleteInvoice = async (id) => { await adminFetch(`/api/admin/invoices/${id}`, { method: 'DELETE' }); fetchInvoices() }
@@ -474,7 +515,7 @@ export default function AdminInvoices() {
               inv={inv}
               expanded={expandedId === inv.id}
               onToggle={() => setExpandedId(expandedId === inv.id ? null : inv.id)}
-              onMarkSent={markSent}
+              onSend={sendInvoice}
               onDelete={deleteInvoice}
               onOpenPaymentModal={openPaymentModal}
               onVoidPayment={voidPayment}

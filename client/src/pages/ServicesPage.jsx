@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Bug, Home, Mouse, ClipboardCheck, Phone, CheckCircle, ArrowRight, ShieldCheck, Clock, Leaf } from 'lucide-react'
+import { Bug, Home, ClipboardCheck, Phone, CheckCircle, ArrowRight } from 'lucide-react'
 
 const services = [
   {
@@ -27,22 +27,8 @@ const services = [
       { name: 'Full Yard & Perimeter Spray', detail: 'We don\'t just spray a barrier around the foundation — we treat your entire yard. From the fence line to the front door, we spray the full property to eliminate pests where they live and breed before they ever reach your home.' },
       { name: 'Quarterly Maintenance Plans', detail: 'Regular scheduled treatments throughout the year keep pest populations controlled and prevent seasonal surges. Each visit includes a full yard and perimeter spray.' },
     ],
-    features: ['Roaches, ants, spiders, crickets', 'Wasps, hornets, and stinging insects', 'Bed bug heat and chemical treatments', 'Flea and tick treatments', 'Eco-friendly product options'],
+    features: ['Roaches, ants, spiders, crickets', 'Wasps, hornets, and stinging insects', 'Flea and tick treatments', 'Eco-friendly product options'],
     image: 'https://images.unsplash.com/photo-1605146769289-440113cc3d00?w=800&q=80',
-  },
-  {
-    id: 'rodent',
-    icon: Mouse,
-    title: 'Rodent Control',
-    tagline: 'Eliminate and exclude rodents for good',
-    description: 'Mice and rats are more than just a nuisance — they chew electrical wiring (a leading cause of house fires), contaminate food, and spread diseases like Hantavirus and Salmonella. Oklahoma\'s mix of urban and rural environments provides ideal conditions for rodent populations. Frontline offers complete rodent control that goes beyond trapping to provide lasting exclusion.',
-    methods: [
-      { name: 'Inspection & Entry Point Identification', detail: 'Our technicians inspect your home inside and out to find every gap, crack, and opening that rodents use to gain entry. Mice can squeeze through a hole the size of a dime.' },
-      { name: 'Trapping & Removal', detail: 'We deploy strategic trap placements in high-activity areas to quickly reduce the active population inside your home.' },
-      { name: 'Exclusion & Sealing', detail: 'We seal all identified entry points with professional-grade materials to prevent rodents from returning. This is the most critical step for long-term control.' },
-    ],
-    features: ['Mice and rat removal', 'Attic and crawl space cleanup', 'Dropping sanitation', 'Entry point sealing', 'Ongoing monitoring available'],
-    image: 'https://images.pexels.com/photos/51340/rat-pets-eat-51340.jpeg?auto=compress&cs=tinysrgb&w=800',
   },
   {
     id: 'inspection',
@@ -73,7 +59,7 @@ export default function ServicesPage() {
               <span className="block text-forest-400">Solutions for Oklahoma</span>
             </h1>
             <p className="text-gray-400 text-lg md:text-xl leading-relaxed">
-              From termite treatment to rodent exclusion, Frontline provides comprehensive pest management tailored to Oklahoma's unique climate and pest pressures.
+              From termite treatment to general pest control, Frontline provides comprehensive pest management tailored to Oklahoma's unique climate and pest pressures.
             </p>
           </div>
         </div>

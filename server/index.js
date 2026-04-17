@@ -723,6 +723,82 @@ app.patch('/api/admin/invoices/:id', auth, (req, res) => {
   });
 });
 
+// POST /api/admin/invoices/:id/send — email the invoice to the customer
+// and (if it was draft) transition status to sent. If the invoice has no
+// customerEmail, falls back to just marking sent so the Send button is
+// never a dead-end for the user. Records a dedicated 'send' audit event
+// with the recipient and SMTP result so Jimmy can prove what went out
+// and when.
+app.post('/api/admin/invoices/:id/send', auth, async (req, res) => {
+  const invoice = invoicesRepo.find(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+
+  const actor = actorFromReq(req);
+  const recipient = (req.body?.to || invoice.customerEmail || '').trim();
+
+  // No email on file — mark the invoice sent (status transition only) so
+  // the Send button still does something useful.
+  if (!recipient) {
+    const updated = invoice.status === 'draft'
+      ? invoicesRepo.update(invoice.id, { status: 'sent' }, {
+          actor,
+          description: `Invoice ${invoice.invoiceNumber} marked sent (no customer email on file)`,
+        })
+      : invoice;
+    recordAudit({
+      action: 'send',
+      recordType: 'invoices',
+      recordId: invoice.id,
+      actor,
+      description: `Invoice ${invoice.invoiceNumber} sent — no customer email, status transition only`,
+      context: { emailed: false, reason: 'no customer email' },
+    });
+    return res.json({ success: true, invoice: enrichInvoice(updated), emailed: false, reason: 'no customer email' });
+  }
+
+  // Send the email. Enrich the invoice first so the template has the
+  // computed balance/paidAmount/effectiveStatus fields.
+  let emailResult;
+  try {
+    const { sendInvoiceEmail } = require('./email');
+    emailResult = await sendInvoiceEmail(enrichInvoice(invoice), { to: recipient });
+  } catch (e) {
+    console.error('sendInvoiceEmail threw:', e);
+    emailResult = { sent: false, reason: e.message };
+  }
+
+  // Transition status to 'sent' on a successful send OR a deliberate send
+  // that couldn't reach SMTP (user still considers it sent from their end).
+  // We don't roll back the status on SMTP failure because the user's
+  // intent was to send; the audit log captures the failure reason.
+  let updated = invoice;
+  if (invoice.status === 'draft') {
+    updated = invoicesRepo.update(invoice.id, { status: 'sent' }, {
+      actor,
+      description: `Invoice ${invoice.invoiceNumber} sent to ${recipient}`,
+    });
+  }
+
+  recordAudit({
+    action: 'send',
+    recordType: 'invoices',
+    recordId: invoice.id,
+    actor,
+    description: emailResult.sent
+      ? `Emailed invoice ${invoice.invoiceNumber} to ${recipient}`
+      : `Attempted to email invoice ${invoice.invoiceNumber} to ${recipient} — ${emailResult.reason || 'unknown error'}`,
+    context: { recipient, emailed: emailResult.sent, reason: emailResult.reason || null },
+  });
+
+  res.json({
+    success: true,
+    invoice: enrichInvoice(updated),
+    emailed: emailResult.sent,
+    reason: emailResult.reason || null,
+    recipient,
+  });
+});
+
 app.delete('/api/admin/invoices/:id', auth, (req, res) => {
   const ok = invoicesRepo.delete(req.params.id, { actor: actorFromReq(req) });
   if (!ok) return res.status(404).json({ error: 'Invoice not found' });

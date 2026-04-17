@@ -11,7 +11,7 @@ const COLUMNS = [
   { key: 'completed', label: 'Completed', color: 'border-green-400', bg: 'bg-green-50', badge: 'bg-green-100 text-green-800' },
 ]
 
-const SERVICE_TYPES = ['Termite Treatment', 'General Pest Control', 'Rodent Control', 'Inspection', 'Other']
+const SERVICE_TYPES = ['Termite Treatment', 'General Pest Control', 'Inspection', 'Other']
 
 function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, onCreateInvoice, cardRef, highlight }) {
   return (

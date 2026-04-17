@@ -139,7 +139,7 @@ test('Converted status cannot be set directly — 409 loophole guard (Phase 1.7)
 
 test('Convert to Job stamps jobId and leadId on both sides (Phase 1.6)', async () => {
   const createRes = await request(server, 'POST', '/api/contact', {
-    body: { name: 'Convert Test Lead', phone: '405-555-8888', service: 'Rodent' },
+    body: { name: 'Convert Test Lead', phone: '405-555-8888', service: 'General Pest Control' },
   });
   assert.equal(createRes.status, 200);
   const leadsList = await request(server, 'GET', '/api/admin/leads', { token });

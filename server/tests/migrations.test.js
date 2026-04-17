@@ -58,7 +58,7 @@ test('migration links orphaned converted lead to its matching job when one exist
     customerName: 'Acme Co',
     phone: '405-555-2222',
     email: 'acme@example.com',
-    serviceType: 'Rodent Control',
+    serviceType: 'General Pest Control',
     status: 'scheduled',
     leadId: null,
   });

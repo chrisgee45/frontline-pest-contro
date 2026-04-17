@@ -139,14 +139,14 @@ test('auto-draft fires on POST when a job is created directly as completed', asy
     token,
     body: {
       customerName: 'Born Complete',
-      serviceType: 'Rodent Control',
+      serviceType: 'General Pest Control',
       status: 'completed',
     },
   });
   assert.equal(res.status, 200);
   assert.ok(res.body.autoInvoice, 'auto-draft should fire for a job born in completed state');
   assert.equal(res.body.autoInvoice.jobId, res.body.job.id);
-  assert.equal(res.body.autoInvoice.items[0].description, 'Rodent Control');
+  assert.equal(res.body.autoInvoice.items[0].description, 'General Pest Control');
 });
 
 test('auto-draft does NOT fire for non-completed statuses', async () => {
