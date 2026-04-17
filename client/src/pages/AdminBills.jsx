@@ -1,8 +1,68 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, X, DollarSign, Clock, AlertTriangle, CreditCard, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+import { Plus, X, DollarSign, Clock, AlertTriangle, CreditCard, ChevronDown, ChevronRight, Trash2, Ban, CircleDollarSign, Calendar } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
+
+// Phase 1.4 — Payment history panel shown when a bill row is expanded.
+// Each payment has a Void (Ban) button that calls the new
+// POST /api/accounting/bill-payments/:id/void endpoint, which posts a
+// reversal entry to the ledger AND a negative transaction to the
+// dashboard feed — nothing is silently deleted.
+function BillPaymentHistory({ billId, refreshKey, onVoidComplete }) {
+  const [payments, setPayments] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    adminFetch(`/api/accounting/bills/${billId}/payments`).then(res => {
+      if (cancelled) return
+      setPayments(res?.data || [])
+      setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [billId, refreshKey])
+
+  const handleVoid = async (paymentId, amount) => {
+    if (!confirm(`Void this $${Number(amount).toFixed(2)} payment? A reversal entry will be posted to accounting — the original won't be deleted from the audit trail.`)) return
+    await adminFetch(`/api/accounting/bill-payments/${paymentId}/void`, { method: 'POST' })
+    onVoidComplete()
+  }
+
+  if (loading) return <div className="px-4 py-2 text-xs text-gray-400">Loading payment history...</div>
+  if (payments.length === 0) return <div className="px-4 py-2 text-xs text-gray-500 italic">No payments recorded yet</div>
+
+  return (
+    <div className="px-4 py-2">
+      <div className="text-xs font-medium text-gray-600 mb-2">Payment History ({payments.length})</div>
+      <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+        {payments.map(p => (
+          <div key={p.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+            <CircleDollarSign size={14} className="text-green-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="font-medium">
+                {formatCurrency(Number(p.amount))}
+                {p.paymentMethod && <span className="ml-2 text-xs text-gray-500 capitalize">({p.paymentMethod})</span>}
+              </div>
+              <div className="text-xs text-gray-400 flex items-center gap-2">
+                <Calendar size={10} />{formatDate(p.paidAt)}
+                {p.memo && <span className="truncate">{p.memo}</span>}
+              </div>
+            </div>
+            <button
+              onClick={() => handleVoid(p.id, p.amount)}
+              className="text-red-400 hover:text-red-600 p-1"
+              title="Void payment"
+            >
+              <Ban size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 const STATUS_STYLES = {
   pending: 'bg-amber-50 text-amber-700', partially_paid: 'bg-blue-50 text-blue-700',
@@ -17,6 +77,7 @@ export default function AdminBills() {
   const [showNew, setShowNew] = useState(false)
   const [showPay, setShowPay] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
   const [filter, setFilter] = useState('all')
   const navigate = useNavigate()
 
@@ -96,22 +157,36 @@ export default function AdminBills() {
                 const vendor = vendorMap.get(bill.vendorId)
                 const balance = bill.amount - bill.paidAmount
                 const isOverdue = ['pending', 'partially_paid'].includes(bill.status) && new Date(bill.dueDate) < now
+                const isExpanded = expandedId === bill.id
                 return (
-                  <tr key={bill.id} className={`border-b border-gray-50 ${isOverdue ? 'bg-red-50/30' : ''}`}>
-                    <td className="px-4 py-2.5"><button onClick={() => setExpandedId(expandedId === bill.id ? null : bill.id)}>{expandedId === bill.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button></td>
-                    <td className="px-4 py-2.5 font-medium">{vendor?.name || 'Unknown'}</td>
-                    <td className="px-4 py-2.5 text-gray-500 truncate max-w-[200px]">{bill.description || '—'}</td>
-                    <td className="px-4 py-2.5 tabular-nums">{formatDate(bill.dueDate)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(bill.amount)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-gray-400">{formatCurrency(bill.paidAmount)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{formatCurrency(balance)}</td>
-                    <td className="px-4 py-2.5"><span className={`px-2 py-0.5 rounded text-[10px] font-medium ${STATUS_STYLES[isOverdue && bill.status !== 'paid' ? 'overdue' : bill.status] || ''}`}>{isOverdue && bill.status !== 'paid' ? 'Overdue' : bill.status}</span></td>
-                    <td className="px-4 py-2.5">
-                      {bill.status !== 'paid' && bill.status !== 'void' && (
-                        <button onClick={() => { setShowPay(bill) }} className="px-2 py-1 rounded text-xs font-medium bg-forest-50 text-forest-700 hover:bg-forest-100"><CreditCard size={12} className="inline mr-1" />Pay</button>
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={bill.id}>
+                    <tr className={`border-b border-gray-50 ${isOverdue ? 'bg-red-50/30' : ''}`}>
+                      <td className="px-4 py-2.5"><button onClick={() => setExpandedId(isExpanded ? null : bill.id)}>{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button></td>
+                      <td className="px-4 py-2.5 font-medium">{vendor?.name || 'Unknown'}</td>
+                      <td className="px-4 py-2.5 text-gray-500 truncate max-w-[200px]">{bill.description || '—'}</td>
+                      <td className="px-4 py-2.5 tabular-nums">{formatDate(bill.dueDate)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(bill.amount)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-gray-400">{formatCurrency(bill.paidAmount)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{formatCurrency(balance)}</td>
+                      <td className="px-4 py-2.5"><span className={`px-2 py-0.5 rounded text-[10px] font-medium ${STATUS_STYLES[isOverdue && bill.status !== 'paid' ? 'overdue' : bill.status] || ''}`}>{isOverdue && bill.status !== 'paid' ? 'Overdue' : bill.status}</span></td>
+                      <td className="px-4 py-2.5">
+                        {bill.status !== 'paid' && bill.status !== 'void' && (
+                          <button onClick={() => { setShowPay(bill) }} className="px-2 py-1 rounded text-xs font-medium bg-forest-50 text-forest-700 hover:bg-forest-100"><CreditCard size={12} className="inline mr-1" />Pay</button>
+                        )}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="bg-gray-50/50">
+                        <td colSpan={9} className="p-0">
+                          <BillPaymentHistory
+                            billId={bill.id}
+                            refreshKey={refreshKey}
+                            onVoidComplete={() => { setRefreshKey(k => k + 1); fetchData() }}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               })}
             </tbody>

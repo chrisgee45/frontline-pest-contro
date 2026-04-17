@@ -1,6 +1,13 @@
 const crypto = require('crypto');
 const { readJSON, writeJSON } = require('./data-dir');
 const { recordAudit } = require('./audit-helpers');
+const { repo } = require('./repo');
+
+// Shared transactions feed for the dashboard — separate from the double-
+// entry journal entries. Expense and bill-payment writes post to both
+// (Phase 1.4) so the dashboard's Total Expenses reflects actual cash
+// movement without the dashboard needing to know about journal entries.
+const transactionsRepo = repo('transactions');
 
 // ==========================================
 // CHART OF ACCOUNTS (Double-Entry System)
@@ -365,7 +372,8 @@ function getExpenses(filters) {
   return expenses.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-function createExpense(data) {
+function createExpense(data, ctx = {}) {
+  const actor = ctx.actor || 'admin';
   const expense = {
     id: crypto.randomUUID(),
     vendorId: data.vendorId || null,
@@ -385,6 +393,7 @@ function createExpense(data) {
     recurringFrequency: data.recurringFrequency || null,
     isVoid: false,
     journalEntryId: null,
+    transactionId: null,
     createdAt: new Date().toISOString(),
   };
 
@@ -392,7 +401,7 @@ function createExpense(data) {
   const acct = getAccountById(data.accountId);
   if (acct) expense.scheduleCLine = acct.scheduleCLine;
 
-  // Post to journal
+  // 1) Post to the double-entry journal (Dr Expense / Cr Cash or CC Payable).
   try {
     const entry = recordExpenseEntry({
       amount: expense.amount,
@@ -405,6 +414,30 @@ function createExpense(data) {
     expense.journalEntryId = entry.id;
   } catch (e) {
     console.error('Failed to post expense to journal:', e.message);
+  }
+
+  // 2) Phase 1.4 — Also post to the simple transactions feed so the
+  //    dashboard's Total Expenses tile and monthly chart pick it up.
+  //    Categorized by the expense account's name (e.g. "Chemicals &
+  //    Materials") so the dashboard's breakdown can differentiate.
+  try {
+    const txn = transactionsRepo.create(
+      {
+        type: 'expense',
+        amount: expense.amount,
+        description: expense.description,
+        category: acct?.name || 'Uncategorized',
+        referenceId: expense.id,
+        date: expense.date || new Date().toISOString(),
+      },
+      {
+        actor,
+        description: `Expense $${expense.amount.toFixed(2)} — ${expense.description}`,
+      }
+    );
+    expense.transactionId = txn.id;
+  } catch (e) {
+    console.error('Failed to post expense to transactions feed:', e.message);
   }
 
   const expenses = readJSON('expenses_ledger', []);
@@ -431,8 +464,39 @@ function voidExpense(id, voidedBy) {
   exp.isVoid = true;
   writeJSON('expenses_ledger', expenses);
 
+  // 1) Void the journal entry (accounting.voidJournalEntry creates a
+  //    reversing entry — never deletes history).
   if (exp.journalEntryId) {
     try { voidJournalEntry(exp.journalEntryId, voidedBy); } catch {}
+  }
+
+  // 2) Phase 1.4 — Also post a negative-amount reversal transaction to the
+  //    simple transactions feed so the dashboard's Total Expenses tile
+  //    updates correctly. Original transaction stays put (audit integrity);
+  //    the negative row makes the net sum correct.
+  if (exp.transactionId) {
+    const original = transactionsRepo.find(exp.transactionId);
+    if (original) {
+      try {
+        transactionsRepo.create(
+          {
+            type: original.type,
+            amount: -Number(exp.amount),
+            description: `REVERSAL: ${original.description}`,
+            category: original.category,
+            referenceId: exp.transactionId,
+            reversalOf: exp.transactionId,
+            date: new Date().toISOString(),
+          },
+          {
+            actor: voidedBy || 'admin',
+            description: `Reversal transaction for voided expense ${exp.id.slice(0, 8)}`,
+          }
+        );
+      } catch (e) {
+        console.error('Failed to post expense reversal transaction:', e.message);
+      }
+    }
   }
 
   addAuditEntry('void', 'expense', id, exp.amount, `Voided expense: ${exp.description}`, voidedBy);
@@ -487,7 +551,8 @@ function createBill(data) {
   return bill;
 }
 
-function recordBillPayment(billId, amount, paymentMethod, memo) {
+function recordBillPayment(billId, amount, paymentMethod, memo, ctx = {}) {
+  const actor = ctx.actor || 'admin';
   const bills = readJSON('bills_ledger', []);
   const bill = bills.find(b => b.id === billId);
   if (!bill) throw new Error('Bill not found');
@@ -495,20 +560,61 @@ function recordBillPayment(billId, amount, paymentMethod, memo) {
   const remaining = bill.amount - bill.paidAmount;
   if (amount > remaining + 0.01) throw new Error(`Payment exceeds remaining balance ($${remaining.toFixed(2)})`);
 
-  // Post payment journal
+  // 1) Post payment journal (Dr AP / Cr Cash) — reduces the liability
+  //    and moves cash out.
+  let journalEntryId = null;
   const cashAcct = getAccountByCode('1000');
   const apAcct = getAccountByCode('2000');
   if (cashAcct && apAcct) {
-    postJournalEntry({
-      date: new Date().toISOString(), memo: memo || `Bill payment: ${bill.description}`, sourceType: 'bill_payment',
+    const entry = postJournalEntry({
+      date: new Date().toISOString(),
+      memo: memo || `Bill payment: ${bill.description}`,
+      sourceType: 'bill_payment',
       lines: [
         { accountId: apAcct.id, debit: amount, credit: 0, memo: 'AP payment' },
         { accountId: cashAcct.id, debit: 0, credit: amount, memo: 'Cash out' },
       ],
     });
+    journalEntryId = entry.id;
   }
 
-  const payment = { id: crypto.randomUUID(), billId, amount, paymentMethod, memo: memo || '', paidAt: new Date().toISOString() };
+  // 2) Phase 1.4 — Post an expense row to the simple transactions feed.
+  //    This is cash-basis reporting: the expense tile only moves when cash
+  //    actually leaves. The original expense was accrued via Dr Expense /
+  //    Cr AP on createBill, but the dashboard doesn't count accrued
+  //    expenses until payment.
+  const expenseAcct = bill.accountId ? getAccountById(bill.accountId) : null;
+  let transactionId = null;
+  try {
+    const txn = transactionsRepo.create(
+      {
+        type: 'expense',
+        amount,
+        description: `Bill payment: ${bill.description || bill.reference || 'Bill'}`,
+        category: expenseAcct?.name || 'Accounts Payable',
+        referenceId: bill.id,
+        date: new Date().toISOString(),
+      },
+      {
+        actor,
+        description: `Expense $${amount.toFixed(2)} — Bill payment ${bill.id.slice(0, 8)}`,
+      }
+    );
+    transactionId = txn.id;
+  } catch (e) {
+    console.error('Failed to post bill payment to transactions feed:', e.message);
+  }
+
+  const payment = {
+    id: crypto.randomUUID(),
+    billId,
+    amount,
+    paymentMethod,
+    memo: memo || '',
+    journalEntryId,
+    transactionId,
+    paidAt: new Date().toISOString(),
+  };
   const payments = readJSON('bill_payments', []);
   payments.unshift(payment);
   writeJSON('bill_payments', payments);
@@ -523,6 +629,86 @@ function recordBillPayment(billId, amount, paymentMethod, memo) {
   writeJSON('bills_ledger', bills);
 
   return { bill, payment };
+}
+
+// Phase 1.4 — List payments for a bill, newest first. Excludes voided
+// payments by default so the UI's "active history" doesn't grow forever;
+// pass { includeVoided: true } to see the full audit trail.
+function getBillPayments(billId, { includeVoided = false } = {}) {
+  const all = readJSON('bill_payments', []).filter(p => p.billId === billId);
+  const filtered = includeVoided ? all : all.filter(p => !p.isVoid);
+  return filtered.sort((a, b) => (b.paidAt || '').localeCompare(a.paidAt || ''));
+}
+
+// Phase 1.4 — Reverse a bill payment. Voids the linked journal entry
+// (creates a mirror reversing entry via accounting.voidJournalEntry),
+// adds a negative-amount reversal transaction to the dashboard feed,
+// and adjusts the bill's paidAmount and derived status. The original
+// bill_payments row is marked isVoid=true — never deleted, so the
+// audit trail is preserved.
+function voidBillPayment(paymentId, ctx = {}) {
+  const actor = ctx.actor || 'admin';
+  const payments = readJSON('bill_payments', []);
+  const payment = payments.find(p => p.id === paymentId);
+  if (!payment) throw new Error('Payment not found');
+  if (payment.isVoid) throw new Error('Already voided');
+
+  // 1) Void journal entry — creates the mirror reversing entry.
+  if (payment.journalEntryId) {
+    try { voidJournalEntry(payment.journalEntryId, actor); } catch (e) {
+      console.error('Failed to void bill payment journal entry:', e.message);
+    }
+  }
+
+  // 2) Add reversal transaction so dashboard totals update.
+  if (payment.transactionId) {
+    const original = transactionsRepo.find(payment.transactionId);
+    if (original) {
+      try {
+        transactionsRepo.create(
+          {
+            type: original.type,
+            amount: -Number(payment.amount),
+            description: `REVERSAL: ${original.description}`,
+            category: original.category,
+            referenceId: payment.transactionId,
+            reversalOf: payment.transactionId,
+            date: new Date().toISOString(),
+          },
+          {
+            actor,
+            description: `Reversal transaction for voided bill payment ${payment.id.slice(0, 8)}`,
+          }
+        );
+      } catch (e) {
+        console.error('Failed to post bill payment reversal transaction:', e.message);
+      }
+    }
+  }
+
+  // 3) Mark the payment row voided (don't delete — audit integrity).
+  payment.isVoid = true;
+  payment.voidedAt = new Date().toISOString();
+  payment.voidedBy = actor;
+  writeJSON('bill_payments', payments);
+
+  // 4) Adjust the bill's paidAmount and re-derive status.
+  const bills = readJSON('bills_ledger', []);
+  const bill = bills.find(b => b.id === payment.billId);
+  if (bill) {
+    bill.paidAmount = Math.max(0, (Number(bill.paidAmount) || 0) - Number(payment.amount));
+    if (bill.paidAmount <= 0.005) {
+      bill.status = 'pending';
+      bill.paidDate = null;
+    } else if (bill.paidAmount < bill.amount - 0.005) {
+      bill.status = 'partially_paid';
+      bill.paidDate = null;
+    }
+    writeJSON('bills_ledger', bills);
+  }
+
+  addAuditEntry('void', 'bill_payment', paymentId, payment.amount, `Voided bill payment: ${payment.memo || payment.billId.slice(0, 8)}`, actor);
+  return { payment, bill };
 }
 
 // ==========================================
@@ -648,7 +834,7 @@ module.exports = {
   recordRevenue, recordExpenseEntry, recordOwnerDraw,
   getVendors, createVendor, updateVendor,
   getExpenses, createExpense, updateExpense, voidExpense,
-  getBills, createBill, recordBillPayment,
+  getBills, createBill, recordBillPayment, voidBillPayment, getBillPayments,
   getBudgets, saveBudgets, getBudgetVsActual,
   getTaxSettings, saveTaxSettings, getQuarterlyPayments, saveQuarterlyPayment,
   addAuditEntry, getAuditLogs,

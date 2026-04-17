@@ -1,5 +1,18 @@
 const express = require('express');
 const acct = require('./accounting');
+const { readJSON } = require('./data-dir');
+
+// Extract the actor email from the bearer token's session — mirrors the
+// same helper in server/index.js. Accounting writes are attributed to the
+// user who made the change so audit events don't all read "admin".
+function actorFromReq(req) {
+  const h = req.headers.authorization;
+  if (!h || !h.startsWith('Bearer ')) return 'anonymous';
+  const token = h.split(' ')[1];
+  const sessions = readJSON('sessions', []);
+  const session = sessions.find(s => s.token === token);
+  return session?.actor || 'admin';
+}
 
 function createAccountingRoutes(authMiddleware) {
   const router = express.Router();
@@ -138,7 +151,7 @@ function createAccountingRoutes(authMiddleware) {
 
   router.post('/expenses', (req, res) => {
     try {
-      const expense = acct.createExpense(req.body);
+      const expense = acct.createExpense(req.body, { actor: actorFromReq(req) });
       res.json({ ok: true, data: expense });
     } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
   });
@@ -150,7 +163,7 @@ function createAccountingRoutes(authMiddleware) {
   });
 
   router.post('/expenses/:id/void', (req, res) => {
-    try { acct.voidExpense(req.params.id, 'admin'); res.json({ ok: true }); }
+    try { acct.voidExpense(req.params.id, actorFromReq(req)); res.json({ ok: true }); }
     catch (e) { res.status(400).json({ ok: false, error: e.message }); }
   });
 
@@ -169,7 +182,31 @@ function createAccountingRoutes(authMiddleware) {
 
   router.post('/bills/:id/pay', (req, res) => {
     try {
-      const result = acct.recordBillPayment(req.params.id, Number(req.body.amount), req.body.paymentMethod, req.body.memo);
+      const result = acct.recordBillPayment(
+        req.params.id,
+        Number(req.body.amount),
+        req.body.paymentMethod,
+        req.body.memo,
+        { actor: actorFromReq(req) }
+      );
+      res.json({ ok: true, data: result });
+    } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  });
+
+  // Phase 1.4 — List payments for a bill so the UI can show a history
+  // panel. Voided payments are hidden by default.
+  router.get('/bills/:id/payments', (req, res) => {
+    const includeVoided = req.query.includeVoided === '1';
+    res.json({ ok: true, data: acct.getBillPayments(req.params.id, { includeVoided }) });
+  });
+
+  // Phase 1.4 — Void a bill payment. Creates a reversing entry in the
+  // journal, adds a negative-amount reversal transaction, and lowers the
+  // bill's paidAmount. Returns the updated bill + payment so the caller
+  // can refresh the UI.
+  router.post('/bill-payments/:id/void', (req, res) => {
+    try {
+      const result = acct.voidBillPayment(req.params.id, { actor: actorFromReq(req) });
       res.json({ ok: true, data: result });
     } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
   });
