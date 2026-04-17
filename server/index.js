@@ -229,6 +229,7 @@ app.post('/api/admin/jobs', auth, (req, res) => {
   const { customerName, address, phone, email, serviceType, scheduledDate, assignedTech, notes, status } = req.body;
   if (!customerName || !serviceType) return res.status(400).json({ error: 'Customer name and service type required' });
 
+  const actor = actorFromReq(req);
   const job = jobsRepo.create(
     {
       customerName,
@@ -243,12 +244,21 @@ app.post('/api/admin/jobs', auth, (req, res) => {
       leadId: null,
     },
     {
-      actor: actorFromReq(req),
+      actor,
       description: `New job: ${serviceType} for ${customerName}`,
     }
   );
 
-  res.json({ success: true, job });
+  // Phase 1.1 — if the job was created directly as completed (rare but
+  // supported), auto-draft the invoice right away. `autoInvoice` in the
+  // response signals "a new invoice was just drafted"; it's null when
+  // nothing new happened.
+  let autoInvoice = null;
+  if (job.status === 'completed' && !findInvoiceByJobId(job.id)) {
+    autoInvoice = autoDraftInvoiceForJob(job, actor);
+  }
+
+  res.json({ success: true, job, autoInvoice });
 });
 
 app.patch('/api/admin/jobs/:id', auth, (req, res) => {
@@ -259,8 +269,24 @@ app.patch('/api/admin/jobs/:id', auth, (req, res) => {
   const patch = {};
   fields.forEach(f => { if (req.body[f] !== undefined) patch[f] = req.body[f]; });
 
-  const updated = jobsRepo.update(req.params.id, patch, { actor: actorFromReq(req) });
-  res.json({ success: true, job: updated });
+  const actor = actorFromReq(req);
+  const updated = jobsRepo.update(req.params.id, patch, { actor });
+
+  // Phase 1.1 — On a transition to Completed, auto-draft a blank invoice
+  // if one doesn't already exist for this job. Runs only on the actual
+  // not-completed → completed transition, and only if no invoice (manual
+  // or otherwise) has been created for this job yet. `autoInvoice` in the
+  // response is non-null only when something new was actually created.
+  let autoInvoice = null;
+  if (
+    req.body.status === 'completed' &&
+    job.status !== 'completed' &&
+    !findInvoiceByJobId(updated.id)
+  ) {
+    autoInvoice = autoDraftInvoiceForJob(updated, actor);
+  }
+
+  res.json({ success: true, job: updated, autoInvoice });
 });
 
 app.delete('/api/admin/jobs/:id', auth, (req, res) => {
@@ -322,6 +348,59 @@ function computeInvoiceTotals(items) {
 function nextInvoiceNumber() {
   const all = invoicesRepo.all();
   return `FL-${String(all.length + 1001).padStart(4, '0')}`;
+}
+
+// Phase 1.1 — Look up an existing invoice for a given job, if any. Used to
+// guarantee idempotency when auto-drafting on status=completed.
+function findInvoiceByJobId(jobId) {
+  if (!jobId) return null;
+  return invoicesRepo.all().find(i => i.jobId === jobId) || null;
+}
+
+// Phase 1.1 — Auto-draft a blank invoice from a completed job. Returns the
+// newly-created invoice, or the existing one if a match for this jobId is
+// already in the system (never creates duplicates).
+//
+// The draft has:
+//   - customer fields inherited from the job
+//   - a single line item using the service type as the description (rate 0,
+//     qty 1 — Phase 2 will introduce a Services catalog with real prices)
+//   - status = 'draft'
+//   - due date = today + 30 days
+//   - jobId back-reference for "View Invoice" links
+function autoDraftInvoiceForJob(job, actor) {
+  const existing = findInvoiceByJobId(job.id);
+  if (existing) return existing;
+
+  const items = [{ description: job.serviceType || 'Service', quantity: 1, rate: 0 }];
+  const { subtotal, tax, total } = computeInvoiceTotals(items);
+  const invoiceNumber = nextInvoiceNumber();
+
+  const due = new Date();
+  due.setDate(due.getDate() + 30);
+  const dueDate = due.toISOString().slice(0, 10); // yyyy-mm-dd
+
+  return invoicesRepo.create(
+    {
+      invoiceNumber,
+      jobId: job.id,
+      customerName: job.customerName,
+      customerEmail: job.email || '',
+      customerAddress: job.address || '',
+      items,
+      notes: '',
+      subtotal,
+      tax,
+      total,
+      status: 'draft',
+      dueDate,
+      paidAt: '',
+    },
+    {
+      actor: actor || 'system',
+      description: `Auto-drafted invoice ${invoiceNumber} from completed job (${job.serviceType}) for ${job.customerName}`,
+    }
+  );
 }
 
 app.post('/api/admin/invoices', auth, (req, res) => {
