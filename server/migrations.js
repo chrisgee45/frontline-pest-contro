@@ -16,6 +16,65 @@ const { recordAudit } = require('./audit-helpers');
 
 const MIGRATIONS = [
   {
+    id: 'phase-1-3-payments-backfill',
+    description:
+      'Phase 1.3: for every invoice that was marked paid under the old boolean ' +
+      'scheme (status=paid), create a synthetic Payment record so the new ' +
+      'derivation (paid = sum of payments >= total) reflects the correct state. ' +
+      'Does NOT re-post to accounting — the old PATCH status=paid code path ' +
+      'already posted those transactions and journal entries, and this migration ' +
+      'would cause double-counting if it called recordPayment.',
+    run() {
+      const invoicesRepo = repo('invoices');
+      const paymentsRepo = repo('payments');
+      let created = 0;
+      let skipped = 0;
+
+      for (const inv of invoicesRepo.all()) {
+        if (inv.status !== 'paid') continue;
+
+        // Idempotency: if a payment already exists for this invoice, skip.
+        const existing = paymentsRepo.all().some(p => p.invoiceId === inv.id);
+        if (existing) {
+          skipped++;
+          continue;
+        }
+
+        const amount = Number(inv.total) || 0;
+        if (amount <= 0) {
+          skipped++;
+          continue;
+        }
+
+        const paymentDate = inv.paidAt || inv.createdAt || new Date().toISOString();
+
+        paymentsRepo.create(
+          {
+            invoiceId: inv.id,
+            amount: Math.round(amount * 100) / 100,
+            paymentDate,
+            paymentMethod: 'unknown',
+            referenceNumber: '',
+            notes: 'Synthetic payment record — backfilled during Phase 1.3 migration.',
+            // Intentionally no transactionId/journalEntryId — the original
+            // transaction and journal entry from the pre-1.3 PATCH status=paid
+            // code still exist on their own in transactions.json and
+            // journal_entries.json. Linking would risk double-voiding.
+            transactionId: null,
+            journalEntryId: null,
+          },
+          {
+            actor: 'migration',
+            description: `Phase 1.3 backfill: synthetic full payment for Invoice ${inv.invoiceNumber}`,
+          }
+        );
+        created++;
+      }
+
+      return { syntheticPaymentsCreated: created, invoicesSkipped: skipped };
+    },
+  },
+  {
     id: 'phase-1-orphan-chris-gee-cleanup',
     description:
       'Phase 1.7 + 1.8: delete the test Chris Gee job from the Completed column ' +

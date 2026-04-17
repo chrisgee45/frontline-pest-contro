@@ -18,6 +18,7 @@ const leadsRepo = repo('leads');
 const jobsRepo = repo('jobs');
 const invoicesRepo = repo('invoices');
 const transactionsRepo = repo('transactions');
+const paymentsRepo = repo('payments');
 
 // Admin credentials (stored in JSON, supports password changes)
 function getAdminCreds() {
@@ -334,8 +335,64 @@ app.post('/api/admin/leads/:id/convert', auth, (req, res) => {
 // ===================
 // INVOICES API
 // ===================
+
+// Phase 1.3 — Compute a per-invoice payment summary. Separated from the
+// enrichment so endpoints that only need one piece (balance before adding
+// a payment, for example) can call this directly without the status
+// derivation overhead.
+function getInvoicePayments(invoiceId) {
+  return paymentsRepo.all().filter(p => p.invoiceId === invoiceId);
+}
+
+function getInvoiceTotals(invoice) {
+  const payments = getInvoicePayments(invoice.id);
+  const paidAmount = payments.reduce((s, p) => s + Number(p.amount), 0);
+  const balance = Math.round((Number(invoice.total) - paidAmount) * 100) / 100;
+  return {
+    paidAmount: Math.round(paidAmount * 100) / 100,
+    balance,
+    payments,
+  };
+}
+
+// Phase 1.3 — Derive the effective status. Persisted invoice.status is
+// only "draft", "sent", or the legacy "paid"/"overdue" values from pre-1.3
+// data. Everything meaningful (paid/partial/overdue) is computed from
+// the payments table at read time.
+function getEffectiveStatus(invoice, paidAmount) {
+  const total = Number(invoice.total);
+  if (total > 0 && paidAmount >= total - 0.005) return 'paid';
+  if (paidAmount > 0.005) return 'partial';
+  // No payments — fall back to the persisted status. Legacy data may
+  // have invoice.status === 'paid' with no payments attached (pre-1.3);
+  // in that case we respect it so nothing regresses visually.
+  if (invoice.status === 'paid') return 'paid';
+  // If the invoice is marked sent AND the due date has passed, it's overdue.
+  if ((invoice.status === 'sent' || invoice.status === 'overdue') && invoice.dueDate) {
+    const due = new Date(invoice.dueDate);
+    if (!isNaN(due.getTime()) && due < new Date()) return 'overdue';
+  }
+  return invoice.status || 'draft';
+}
+
+// Phase 1.3 — Return an invoice object with the derived payment fields
+// attached. The frontend reads effectiveStatus for display; baseStatus is
+// the persisted value the user can toggle between draft and sent.
+function enrichInvoice(invoice) {
+  const { paidAmount, balance, payments } = getInvoiceTotals(invoice);
+  const effectiveStatus = getEffectiveStatus(invoice, paidAmount);
+  return {
+    ...invoice,
+    baseStatus: invoice.status,
+    paidAmount,
+    balance,
+    effectiveStatus,
+    payments: payments.sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || '')),
+  };
+}
+
 app.get('/api/admin/invoices', auth, (req, res) => {
-  res.json({ invoices: invoicesRepo.all() });
+  res.json({ invoices: invoicesRepo.all().map(enrichInvoice) });
 });
 
 function computeInvoiceTotals(items) {
@@ -403,6 +460,182 @@ function autoDraftInvoiceForJob(job, actor) {
   );
 }
 
+// Phase 1.3 + 1.2 — Record a payment against an invoice. Posts to the
+// simple transactions feed (for dashboard tiles) AND the double-entry
+// accounting ledger (for financial reports). Both posting IDs are
+// stored on the Payment so they can be reversed cleanly on delete.
+//
+// Throws on invalid input; caller is responsible for status-code handling.
+const VALID_PAYMENT_METHODS = ['cash', 'check', 'card', 'ach', 'other', 'unknown'];
+
+function recordPayment(invoice, { amount, paymentDate, paymentMethod, referenceNumber, notes }, actor) {
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) {
+    throw new Error('amount must be a positive number');
+  }
+  const method = (paymentMethod || 'cash').toLowerCase();
+  if (!VALID_PAYMENT_METHODS.includes(method)) {
+    throw new Error(`paymentMethod must be one of: ${VALID_PAYMENT_METHODS.join(', ')}`);
+  }
+
+  const { balance } = getInvoiceTotals(invoice);
+  if (amt > balance + 0.005) {
+    throw new Error(`Payment amount ($${amt.toFixed(2)}) exceeds remaining balance ($${balance.toFixed(2)})`);
+  }
+
+  const dateIso = paymentDate
+    ? new Date(paymentDate).toISOString()
+    : new Date().toISOString();
+
+  // 1. Post to the simple transactions feed that the dashboard reads.
+  const txn = transactionsRepo.create(
+    {
+      type: 'income',
+      amount: amt,
+      description: `Payment for Invoice ${invoice.invoiceNumber} — ${invoice.customerName}`,
+      category: 'Service Revenue',
+      referenceId: invoice.id,
+      date: dateIso,
+    },
+    {
+      actor: actor || 'system',
+      description: `Income $${amt.toFixed(2)} — Invoice ${invoice.invoiceNumber}`,
+    }
+  );
+
+  // 2. Post to the double-entry accounting ledger.
+  let journalEntryId = null;
+  try {
+    const acct = require('./accounting');
+    let revenueCode = '4000';
+    const serviceType = (invoice.items?.[0]?.description || '').toLowerCase();
+    if (serviceType.includes('termite')) revenueCode = '4010';
+    else if (serviceType.includes('inspect')) revenueCode = '4020';
+    const revenueAcct = acct.getAccountByCode(revenueCode);
+    if (revenueAcct) {
+      const entry = acct.recordRevenue({
+        amount: amt,
+        revenueAccountId: revenueAcct.id,
+        paymentMethod: method,
+        memo: `Payment for Invoice ${invoice.invoiceNumber} — ${invoice.customerName}`,
+        date: dateIso,
+      });
+      journalEntryId = entry?.id || null;
+    }
+  } catch (e) {
+    // If the ledger post fails, we still create the payment so the user's
+    // action isn't lost — but log it loudly so the failure is noticed.
+    console.error('[payment] accounting ledger post failed:', e.message);
+  }
+
+  // 3. Create the Payment record itself.
+  const payment = paymentsRepo.create(
+    {
+      invoiceId: invoice.id,
+      amount: Math.round(amt * 100) / 100,
+      paymentDate: dateIso,
+      paymentMethod: method,
+      referenceNumber: referenceNumber || '',
+      notes: notes || '',
+      transactionId: txn.id,
+      journalEntryId,
+    },
+    {
+      actor: actor || 'system',
+      description: `Recorded payment of $${amt.toFixed(2)} (${method}) for Invoice ${invoice.invoiceNumber}`,
+    }
+  );
+
+  return payment;
+}
+
+// Phase 1.2 — Reverse a payment. Creates a reversal journal entry in
+// accounting.js (so the ledger shows the original and the reversal,
+// never silently erases history), adds a negative-amount transaction
+// to the dashboard feed, and deletes the Payment record. All three
+// changes are individually audited via the repo.
+function reversePayment(payment, actor) {
+  // 1. Void the linked journal entry — accounting.voidJournalEntry creates
+  //    a reversal entry (mirror of debits/credits) and marks the original
+  //    as voided. It also writes its own audit event.
+  if (payment.journalEntryId) {
+    try {
+      const acct = require('./accounting');
+      acct.voidJournalEntry(payment.journalEntryId, actor || 'system');
+    } catch (e) {
+      console.error('[payment-reversal] voidJournalEntry failed:', e.message);
+    }
+  }
+
+  // 2. Add a reversal transaction to the simple feed so dashboard totals
+  //    update correctly. Never mutates the original transaction.
+  if (payment.transactionId) {
+    const original = transactionsRepo.find(payment.transactionId);
+    if (original) {
+      transactionsRepo.create(
+        {
+          type: original.type,
+          amount: -Number(payment.amount),
+          description: `REVERSAL: ${original.description}`,
+          category: original.category,
+          referenceId: payment.transactionId,
+          reversalOf: payment.transactionId,
+          date: new Date().toISOString(),
+        },
+        {
+          actor: actor || 'system',
+          description: `Reversal transaction for voided payment ${payment.id.slice(0, 8)}`,
+        }
+      );
+    }
+  }
+
+  // 3. Delete the payment (audit entry includes the `before` snapshot).
+  paymentsRepo.delete(payment.id, {
+    actor: actor || 'system',
+    description: `Voided payment of $${Number(payment.amount).toFixed(2)}`,
+  });
+}
+
+// POST /api/admin/invoices/:id/payments — record a payment against an
+// invoice. Returns { payment, invoice } with the invoice re-enriched so
+// the caller sees the new paidAmount/balance/effectiveStatus.
+app.post('/api/admin/invoices/:id/payments', auth, (req, res) => {
+  const invoice = invoicesRepo.find(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  try {
+    const payment = recordPayment(invoice, req.body, actorFromReq(req));
+    res.json({ success: true, payment, invoice: enrichInvoice(invoicesRepo.find(invoice.id)) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// GET /api/admin/invoices/:id/payments — list payments for a specific
+// invoice. Frontend uses this for the payment history panel.
+app.get('/api/admin/invoices/:id/payments', auth, (req, res) => {
+  const invoice = invoicesRepo.find(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+  const payments = getInvoicePayments(invoice.id)
+    .sort((a, b) => (b.paymentDate || '').localeCompare(a.paymentDate || ''));
+  res.json({ payments });
+});
+
+// DELETE /api/admin/payments/:id — reverse a payment. Creates reversal
+// entries in both the accounting ledger and the dashboard transaction
+// feed, then removes the Payment itself.
+app.delete('/api/admin/payments/:id', auth, (req, res) => {
+  const payment = paymentsRepo.find(req.params.id);
+  if (!payment) return res.status(404).json({ error: 'Payment not found' });
+  const actor = actorFromReq(req);
+  reversePayment(payment, actor);
+  const invoice = invoicesRepo.find(payment.invoiceId);
+  res.json({
+    success: true,
+    invoice: invoice ? enrichInvoice(invoice) : null,
+  });
+});
+
 app.post('/api/admin/invoices', auth, (req, res) => {
   const { jobId, customerName, customerEmail, customerAddress, items, notes, dueDate } = req.body;
   if (!customerName || !items || !items.length) return res.status(400).json({ error: 'Customer name and at least one line item required' });
@@ -439,64 +672,55 @@ app.patch('/api/admin/invoices/:id', auth, (req, res) => {
   const inv = invoicesRepo.find(req.params.id);
   if (!inv) return res.status(404).json({ error: 'Invoice not found' });
 
+  const actor = actorFromReq(req);
   const patch = {};
   if (req.body.notes !== undefined) patch.notes = req.body.notes;
 
-  let justPaid = false;
-  if (req.body.status && req.body.status !== inv.status) {
-    patch.status = req.body.status;
-    if (req.body.status === 'paid') {
-      patch.paidAt = new Date().toISOString();
-      justPaid = true;
-    }
-  }
-
-  const updated = invoicesRepo.update(req.params.id, patch, {
-    actor: actorFromReq(req),
-    description: req.body.status && req.body.status !== inv.status
-      ? `Invoice ${inv.invoiceNumber} → ${req.body.status}`
-      : undefined,
-  });
-
-  // Legacy behavior: when an invoice is marked paid through this endpoint,
-  // post to the simple transactions log AND the double-entry ledger.
-  // Task 1.3 will replace this with the Payments table path, at which point
-  // this block will be removed.
-  if (justPaid) {
-    transactionsRepo.create(
-      {
-        type: 'income',
-        amount: inv.total,
-        description: `Invoice ${inv.invoiceNumber} — ${inv.customerName}`,
-        category: 'Service Revenue',
-        referenceId: inv.id,
-        date: new Date().toISOString(),
-      },
-      { actor: actorFromReq(req) }
-    );
-
-    try {
-      const acct = require('./accounting');
-      let revenueCode = '4000'; // Default: Pest Control
-      const serviceType = (inv.items?.[0]?.description || '').toLowerCase();
-      if (serviceType.includes('termite')) revenueCode = '4010';
-      else if (serviceType.includes('inspect')) revenueCode = '4020';
-      const revenueAcct = acct.getAccountByCode(revenueCode);
-      if (revenueAcct) {
-        acct.recordRevenue({
-          amount: inv.total,
-          revenueAccountId: revenueAcct.id,
-          paymentMethod: 'cash',
-          memo: `Invoice ${inv.invoiceNumber} — ${inv.customerName}`,
-          date: updated.paidAt,
-        });
+  // Phase 1.3 — 'paid' is no longer a manually-settable status. Invoices
+  // become paid by having payments recorded against them. For backward
+  // compatibility with any old clients that still PATCH status=paid, we
+  // self-heal: auto-record a payment for the remaining balance, don't
+  // touch the persisted status. The derived effectiveStatus will come
+  // out as 'paid' on the next GET. 'partial' and 'overdue' are likewise
+  // derived, not persisted.
+  let synthesizedPayment = null;
+  if (req.body.status === 'paid') {
+    const { balance } = getInvoiceTotals(inv);
+    if (balance > 0.005) {
+      try {
+        synthesizedPayment = recordPayment(
+          inv,
+          { amount: balance, paymentMethod: 'unknown', notes: 'Auto-recorded via legacy Mark-as-Paid' },
+          actor
+        );
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
       }
-    } catch (e) {
-      console.error('Failed to post invoice to accounting ledger:', e.message);
     }
+    // Fall through — no status field change on the invoice itself
+  } else if (req.body.status && req.body.status !== inv.status) {
+    if (!['draft', 'sent'].includes(req.body.status)) {
+      return res.status(400).json({
+        error: `Status '${req.body.status}' is not manually settable. Use POST /api/admin/invoices/:id/payments to record a payment.`,
+      });
+    }
+    patch.status = req.body.status;
   }
 
-  res.json({ success: true, invoice: updated });
+  const updated = Object.keys(patch).length > 0
+    ? invoicesRepo.update(req.params.id, patch, {
+        actor,
+        description: patch.status
+          ? `Invoice ${inv.invoiceNumber} → ${patch.status}`
+          : undefined,
+      })
+    : inv;
+
+  res.json({
+    success: true,
+    invoice: enrichInvoice(updated),
+    synthesizedPayment,
+  });
 });
 
 app.delete('/api/admin/invoices/:id', auth, (req, res) => {
