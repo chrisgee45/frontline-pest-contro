@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, CheckCircle, DollarSign, FileText, Printer } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
+import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, CheckCircle, DollarSign, FileText, Printer, Briefcase } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
@@ -11,13 +11,15 @@ const STATUS_MAP = {
   overdue: { label: 'Overdue', color: 'bg-red-100 text-red-800' },
 }
 
-function InvoiceRow({ inv, onUpdate, onDelete }) {
-  const [expanded, setExpanded] = useState(false)
+function InvoiceRow({ inv, expanded, onToggle, onUpdate, onDelete, cardRef, highlight }) {
   const s = STATUS_MAP[inv.status] || STATUS_MAP.draft
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50" onClick={() => setExpanded(!expanded)}>
+    <div
+      ref={cardRef}
+      className={`bg-white rounded-xl border shadow-sm overflow-hidden transition-all ${highlight ? 'border-forest-500 ring-2 ring-forest-200' : 'border-gray-100'}`}
+    >
+      <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50" onClick={onToggle}>
         <div className="flex items-center gap-4 min-w-0">
           <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${s.color}`}>{s.label}</span>
           <div className="min-w-0">
@@ -35,6 +37,18 @@ function InvoiceRow({ inv, onUpdate, onDelete }) {
       </div>
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50 space-y-4">
+          {inv.jobId && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200">
+              <Briefcase size={14} className="text-blue-700" />
+              <span className="text-xs text-blue-900">This invoice was generated from a job.</span>
+              <Link
+                to={`/admin/jobs?focus=${inv.jobId}`}
+                className="ml-auto text-xs font-semibold text-blue-700 hover:text-blue-900 underline"
+              >
+                View Job →
+              </Link>
+            </div>
+          )}
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
               <thead><tr className="bg-gray-50 text-left"><th className="px-3 py-2 text-xs font-medium text-gray-500">Item</th><th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Qty</th><th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Rate</th><th className="px-3 py-2 text-xs font-medium text-gray-500 text-right">Amount</th></tr></thead>
@@ -132,8 +146,13 @@ export default function AdminInvoices() {
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [prefill, setPrefill] = useState(null)
+  const [expandedId, setExpandedId] = useState(null)
+  const [highlightedId, setHighlightedId] = useState(null)
   const navigate = useNavigate()
   const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusId = searchParams.get('focus')
+  const focusedRef = useRef(null)
 
   const fetchInvoices = useCallback(async () => {
     if (!getToken()) { navigate('/admin'); return }
@@ -147,6 +166,32 @@ export default function AdminInvoices() {
   useEffect(() => {
     if (location.state?.fromJob) { setPrefill(location.state.fromJob); setShowNew(true); window.history.replaceState({}, '') }
   }, [location.state])
+
+  // When navigated here with ?focus=<invoiceId>, auto-expand the matching
+  // invoice, scroll it into view, force-clear any filter that might be
+  // hiding it, then clean the URL so a refresh doesn't re-trigger the
+  // scroll. Same pattern used by AdminLeads and AdminJobs for 1.6.
+  useEffect(() => {
+    if (!focusId || invoices.length === 0) return
+    const inv = invoices.find(i => i.id === focusId)
+    if (!inv) return
+    setExpandedId(focusId)
+    setHighlightedId(focusId)
+    if (filter !== 'all' && inv.status !== filter) setFilter('all')
+    setTimeout(() => {
+      focusedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+    setSearchParams({}, { replace: true })
+  }, [focusId, invoices, filter, setSearchParams])
+
+  // Fade the highlight ring 2.5s after it's set. Separate effect keyed on
+  // highlightedId so setSearchParams doesn't tear down the fade timer
+  // (same bug fix as Commit D-fix, same pattern).
+  useEffect(() => {
+    if (!highlightedId) return
+    const timer = setTimeout(() => setHighlightedId(null), 2500)
+    return () => clearTimeout(timer)
+  }, [highlightedId])
 
   const createInvoice = async (form) => {
     if (form.jobId) {
@@ -186,7 +231,16 @@ export default function AdminInvoices() {
           {filtered.length === 0 ? (
             <div className="text-center py-16 bg-white rounded-xl border border-gray-100"><p className="text-gray-500">No invoices</p></div>
           ) : filtered.map(inv => (
-            <InvoiceRow key={inv.id} inv={inv} onUpdate={updateStatus} onDelete={deleteInvoice} />
+            <InvoiceRow
+              key={inv.id}
+              inv={inv}
+              expanded={expandedId === inv.id}
+              onToggle={() => setExpandedId(expandedId === inv.id ? null : inv.id)}
+              onUpdate={updateStatus}
+              onDelete={deleteInvoice}
+              cardRef={inv.id === focusId ? focusedRef : undefined}
+              highlight={inv.id === highlightedId}
+            />
           ))}
         </div>
       )}

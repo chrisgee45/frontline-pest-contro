@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { Plus, X, MapPin, Phone, Calendar, User, Trash2, FileText, UserCheck } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
@@ -13,7 +13,7 @@ const COLUMNS = [
 
 const SERVICE_TYPES = ['Termite Treatment', 'General Pest Control', 'Rodent Control', 'Inspection', 'Other']
 
-function JobCard({ job, expanded, onToggle, onStatusChange, onDelete, onCreateInvoice, cardRef, highlight }) {
+function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, onCreateInvoice, cardRef, highlight }) {
   return (
     <div
       ref={cardRef}
@@ -48,8 +48,19 @@ function JobCard({ job, expanded, onToggle, onStatusChange, onDelete, onCreateIn
             ))}
           </div>
           <div className="flex gap-2 pt-1">
-            {job.status === 'completed' && (
-              <button onClick={() => onCreateInvoice(job)} className="flex items-center gap-1 text-[10px] text-forest-700 font-medium hover:underline"><FileText size={11} />Create Invoice</button>
+            {invoice ? (
+              <Link
+                to={`/admin/invoices?focus=${invoice.id}`}
+                className="flex items-center gap-1 text-[10px] text-forest-700 font-medium hover:underline"
+                title={`View invoice ${invoice.invoiceNumber}`}
+              >
+                <FileText size={11} />View Invoice {invoice.invoiceNumber}
+                {invoice.status === 'draft' && <span className="ml-1 text-gray-400">(Draft)</span>}
+              </Link>
+            ) : (
+              <button onClick={() => onCreateInvoice(job)} className="flex items-center gap-1 text-[10px] text-forest-700 font-medium hover:underline">
+                <FileText size={11} />Create Invoice
+              </button>
             )}
             <button onClick={() => { if (confirm('Delete this job?')) onDelete(job.id) }} className="flex items-center gap-1 text-[10px] text-red-600 font-medium hover:underline ml-auto"><Trash2 size={11} />Delete</button>
           </div>
@@ -97,6 +108,7 @@ function NewJobModal({ onClose, onSave }) {
 
 export default function AdminJobs() {
   const [jobs, setJobs] = useState([])
+  const [invoices, setInvoices] = useState([])
   const [showNew, setShowNew] = useState(false)
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
@@ -106,10 +118,24 @@ export default function AdminJobs() {
   const focusId = searchParams.get('focus')
   const focusedRef = useRef(null)
 
+  // Index invoices by jobId so each card can look up "does this job have
+  // an invoice yet?" without scanning the full list.
+  const invoiceByJobId = useMemo(() => {
+    const map = {}
+    for (const i of invoices) {
+      if (i.jobId) map[i.jobId] = i
+    }
+    return map
+  }, [invoices])
+
   const fetchJobs = useCallback(async () => {
     if (!getToken()) { navigate('/admin'); return }
-    const data = await adminFetch('/api/admin/jobs')
-    if (data) setJobs(data.jobs || [])
+    const [jobsRes, invoicesRes] = await Promise.all([
+      adminFetch('/api/admin/jobs'),
+      adminFetch('/api/admin/invoices'),
+    ])
+    if (jobsRes) setJobs(jobsRes.jobs || [])
+    if (invoicesRes) setInvoices(invoicesRes.invoices || [])
     setLoading(false)
   }, [navigate])
 
@@ -172,6 +198,7 @@ export default function AdminJobs() {
                   <JobCard
                     key={job.id}
                     job={job}
+                    invoice={invoiceByJobId[job.id]}
                     expanded={expandedId === job.id}
                     onToggle={() => setExpandedId(expandedId === job.id ? null : job.id)}
                     onStatusChange={updateStatus}
