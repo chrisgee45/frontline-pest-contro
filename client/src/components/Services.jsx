@@ -1,4 +1,4 @@
-import { Bug, Home, ClipboardCheck } from 'lucide-react'
+import { Bug, Home, Rat, ClipboardCheck } from 'lucide-react'
 
 const services = [
   {
@@ -12,6 +12,12 @@ const services = [
     title: 'General Pest Control',
     description: 'Year-round protection from roaches, ants, spiders, wasps, and other common Oklahoma pests with targeted treatment plans.',
     features: ['Full yard & perimeter spray', 'Quarterly maintenance plans', 'Eco-friendly options', 'Family & pet safe'],
+  },
+  {
+    icon: Rat,
+    title: 'Rodent Control',
+    description: 'Mice and rat control with exclusion and long-term prevention. We identify how rodents are getting in, seal those entry points, and keep them out.',
+    features: ['Mice and rat control', 'Entry point identification', 'Exclusion & sealing', 'Ongoing prevention'],
   },
   {
     icon: ClipboardCheck,
@@ -32,12 +38,12 @@ export default function Services() {
             Complete Pest Protection for Your Home
           </h2>
           <p className="text-gray-600 text-lg">
-            From termite treatment to general pest control, we provide comprehensive solutions tailored to Oklahoma's unique pest pressures.
+            From termite treatment to mice and rat control, we provide comprehensive solutions tailored to Oklahoma's unique pest pressures.
           </p>
         </div>
 
         {/* Service cards */}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
           {services.map((service, i) => (
             <div
               key={i}

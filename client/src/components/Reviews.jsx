@@ -19,8 +19,8 @@ const reviews = [
     name: 'Michelle T.',
     location: 'Norman, OK',
     rating: 5,
-    text: 'We were dealing with roaches and spiders for months before calling Frontline. Jimmy treated our whole yard plus the inside and they were gone within a week. Now we\'re on their quarterly plan.',
-    service: 'General Pest Control',
+    text: 'Had mice coming in through the attic. Frontline figured out exactly where they were getting in, sealed everything up, and we haven\'t had a single issue since. Worth every penny.',
+    service: 'Rodent Control',
   },
   {
     name: 'James & Linda K.',

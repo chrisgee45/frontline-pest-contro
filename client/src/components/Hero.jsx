@@ -29,7 +29,7 @@ export default function Hero() {
 
           {/* Subheadline */}
           <p className="text-lg md:text-xl text-gray-300 mb-8 leading-relaxed max-w-xl">
-            Protecting Oklahoma homes and businesses from termites and pests with expert treatment backed by our satisfaction guarantee. Owned and operated by Jimmy Manharth.
+            Protecting Oklahoma homes and businesses from termites, rodents, and pests with expert treatment backed by our satisfaction guarantee. Owned and operated by Jimmy Manharth.
           </p>
 
           {/* CTAs */}

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Bug, Home, ClipboardCheck, Phone, CheckCircle, ArrowRight } from 'lucide-react'
+import { Bug, Home, Rat, ClipboardCheck, Phone, CheckCircle, ArrowRight } from 'lucide-react'
 
 const services = [
   {
@@ -31,6 +31,20 @@ const services = [
     image: 'https://images.unsplash.com/photo-1605146769289-440113cc3d00?w=800&q=80',
   },
   {
+    id: 'rodent',
+    icon: Rat,
+    title: 'Rodent Control',
+    tagline: 'Mice and rat control with lasting exclusion',
+    description: 'Mice and rats chew electrical wiring, contaminate food, and spread disease. Oklahoma\'s mix of urban and rural environments gives rodent populations ideal conditions. Frontline focuses on finding how they\'re getting in and shutting those entry points down so the problem doesn\'t come back.',
+    methods: [
+      { name: 'Inspection & Entry Point Identification', detail: 'Our technicians inspect your home inside and out to find every gap, crack, and opening that rodents use to gain entry. Mice can squeeze through a hole the size of a dime, so a thorough inspection is the foundation of the service.' },
+      { name: 'Exclusion & Sealing', detail: 'We seal identified entry points with professional-grade materials designed to stand up to chewing and weather. This is the most important step for long-term control — without it, any other treatment is temporary.' },
+      { name: 'Ongoing Monitoring & Prevention', detail: 'Follow-up visits check the seals, look for new activity, and catch any issues before they grow. Recommended for older homes, homes near fields or water, and properties with recurring rodent pressure.' },
+    ],
+    features: ['Mice and rat control', 'Entry point identification', 'Exclusion & sealing', 'Attic and crawl space inspection', 'Ongoing monitoring available'],
+    image: 'https://images.unsplash.com/photo-1589652717521-10c0d092dea9?w=800&q=80',
+  },
+  {
     id: 'inspection',
     icon: ClipboardCheck,
     title: 'Inspections',
@@ -59,7 +73,7 @@ export default function ServicesPage() {
               <span className="block text-forest-400">Solutions for Oklahoma</span>
             </h1>
             <p className="text-gray-400 text-lg md:text-xl leading-relaxed">
-              From termite treatment to general pest control, Frontline provides comprehensive pest management tailored to Oklahoma's unique climate and pest pressures.
+              From termite treatment to mice and rat control, Frontline provides comprehensive pest management tailored to Oklahoma's unique climate and pest pressures.
             </p>
           </div>
         </div>

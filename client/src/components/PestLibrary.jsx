@@ -3,10 +3,10 @@ const pests = [
   { name: 'Cockroaches', icon: '🪳', description: 'German and American roaches thrive in Oklahoma\'s warm climate and spread disease.', threat: 'High' },
   { name: 'Ants', icon: '🐜', description: 'Fire ants, carpenter ants, and odorous house ants are common invaders across the state.', threat: 'Medium' },
   { name: 'Spiders', icon: '🕷️', description: 'Brown recluse and black widow spiders pose real health risks in Oklahoma homes.', threat: 'High' },
+  { name: 'Mice & Rats', icon: '🐀', description: 'Rodents chew wiring, contaminate food, and spread disease. We focus on finding entry points and sealing them for lasting control.', threat: 'High' },
   { name: 'Mosquitoes', icon: '🦟', description: 'Carriers of West Nile and other diseases. Thrive in Oklahoma\'s humid summers.', threat: 'Medium' },
   { name: 'Wasps & Hornets', icon: '🐝', description: 'Paper wasps and mud daubers build nests on Oklahoma homes. Painful stings.', threat: 'Medium' },
   { name: 'Fleas & Ticks', icon: '🦗', description: 'Bite pets and people, carry disease, and reproduce rapidly in yards and carpets.', threat: 'Medium' },
-  { name: 'Crickets', icon: '🦗', description: 'Loud and destructive, crickets invade basements, crawl spaces, and garages in fall.', threat: 'Low' },
 ]
 
 export default function PestLibrary() {

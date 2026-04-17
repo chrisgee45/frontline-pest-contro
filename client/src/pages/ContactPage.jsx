@@ -181,6 +181,7 @@ export default function ContactPage() {
                         <option value="">Select a service</option>
                         <option value="termite">Termite Treatment</option>
                         <option value="pest">General Pest Control</option>
+                        <option value="rodent">Rodent Control</option>
                         <option value="inspection">Inspection</option>
                         <option value="other">Other / Not Sure</option>
                       </select>
