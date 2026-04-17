@@ -1,8 +1,168 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, MapPin, Phone, Calendar, User, Trash2, FileText, UserCheck, UserSquare } from 'lucide-react'
+import { Plus, X, MapPin, Phone, Mail, Calendar, User, Trash2, FileText, UserCheck, UserSquare, Search } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatDate } from '../hooks/useAdmin'
+
+// Format a digits-only phone to 405-555-1212 for display.
+function fmtPhone(p) {
+  const d = String(p || '').replace(/\D/g, '')
+  if (d.length === 10) return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`
+  if (d.length === 11 && d.startsWith('1')) return `${d.slice(1, 4)}-${d.slice(4, 7)}-${d.slice(7)}`
+  return p || ''
+}
+
+// Searchable customer picker. Shows a dropdown of matching households as
+// the user types in the Customer Name field. Selecting a match fills in
+// the rest of the contact fields and passes customerId through to the
+// POST payload so the backend skips its own match-or-create logic.
+//
+// When nothing is selected, the parent's customerName/phone/email/address
+// fields drive creation as before; findOrCreateCustomer on the backend
+// will handle dedup.
+function CustomerPicker({ form, setForm }) {
+  const [suggestions, setSuggestions] = useState([])
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const containerRef = useRef(null)
+
+  // Close the dropdown when clicking outside the picker.
+  useEffect(() => {
+    const onDocClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [])
+
+  // Debounced search. Skip when a customer is already selected (so
+  // users can edit the name cosmetically without re-triggering search)
+  // or when the query is too short to be useful.
+  useEffect(() => {
+    if (form.customerId) return
+    const q = (form.customerName || '').trim()
+    if (q.length < 2) { setSuggestions([]); return }
+    const timer = setTimeout(async () => {
+      setLoading(true)
+      const res = await adminFetch(`/api/admin/customers?q=${encodeURIComponent(q)}`)
+      setLoading(false)
+      if (res?.customers) {
+        setSuggestions(res.customers.slice(0, 6))
+        setOpen(res.customers.length > 0)
+      }
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [form.customerName, form.customerId])
+
+  const handleSelect = (cust) => {
+    setForm(f => ({
+      ...f,
+      customerId: cust.id,
+      customerName: cust.displayName,
+      // Auto-fill contact details from the primary contact so Jimmy doesn't
+      // have to retype them. If the customer has a default service location
+      // with a different address, prefer that over billingAddress.
+      phone: cust.primaryPhone ? fmtPhone(cust.primaryPhone) : f.phone,
+      email: cust.primaryEmail || f.email,
+      address: cust.billingAddress || f.address,
+    }))
+    setOpen(false)
+    setSuggestions([])
+  }
+
+  const clearSelection = () => {
+    setForm(f => ({ ...f, customerId: null }))
+  }
+
+  const linked = !!form.customerId
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <label className="block text-xs font-medium text-gray-700 mb-1">Customer Name *</label>
+      <div className="relative">
+        {linked ? (
+          <UserSquare size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-forest-600" />
+        ) : (
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        )}
+        <input
+          required
+          value={form.customerName}
+          onChange={e => setForm({ ...form, customerName: e.target.value, customerId: null })}
+          onFocus={() => { if (suggestions.length > 0 && !form.customerId) setOpen(true) }}
+          placeholder="Start typing — existing customers will appear below"
+          className={`w-full pl-9 ${linked ? 'pr-9' : 'pr-3'} py-2 rounded-lg border text-sm focus:border-forest-500 outline-none ${linked ? 'border-forest-500 bg-forest-50' : 'border-gray-200'}`}
+        />
+        {linked && (
+          <button
+            type="button"
+            onClick={clearSelection}
+            title="Clear selection (treat as new customer)"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-forest-700 hover:text-forest-900 p-1"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
+      {/* Linked banner */}
+      {linked && (
+        <p className="text-[11px] text-forest-700 mt-1 flex items-center gap-1">
+          <UserSquare size={10} />Linked to existing customer — contact info pulled from the household
+        </p>
+      )}
+
+      {/* Dropdown */}
+      {open && !linked && suggestions.length > 0 && (
+        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
+          <div className="px-3 py-2 text-[10px] text-gray-400 uppercase tracking-wider border-b border-gray-100 bg-gray-50">
+            {suggestions.length} existing {suggestions.length === 1 ? 'customer' : 'customers'} matching
+          </div>
+          {suggestions.map(c => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => handleSelect(c)}
+              className="w-full text-left px-3 py-2 hover:bg-forest-50 border-b border-gray-100 last:border-0 transition-colors"
+            >
+              <div className="font-medium text-sm text-charcoal-900 truncate">{c.displayName}</div>
+              <div className="text-xs text-gray-500 flex items-center gap-3 flex-wrap mt-0.5">
+                {c.primaryContactName && c.primaryContactName !== c.displayName && (
+                  <span className="truncate">{c.primaryContactName}</span>
+                )}
+                {c.primaryPhone && (
+                  <span className="flex items-center gap-1"><Phone size={9} />{fmtPhone(c.primaryPhone)}</span>
+                )}
+                {c.primaryEmail && (
+                  <span className="flex items-center gap-1 truncate"><Mail size={9} />{c.primaryEmail}</span>
+                )}
+                {c.jobCount > 0 && (
+                  <span className="text-gray-400">· {c.jobCount} {c.jobCount === 1 ? 'job' : 'jobs'}</span>
+                )}
+              </div>
+              {c.billingAddress && (
+                <div className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1 truncate">
+                  <MapPin size={9} />{c.billingAddress}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Empty state hint */}
+      {open && !linked && suggestions.length === 0 && !loading && (form.customerName || '').trim().length >= 2 && (
+        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2">
+          <p className="text-xs text-gray-500">
+            No existing customer matches "{form.customerName}". A new customer record will be created automatically when you save this job.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const COLUMNS = [
   { key: 'new', label: 'New', color: 'border-blue-400', bg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-800' },
@@ -78,7 +238,17 @@ function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, o
 }
 
 function NewJobModal({ onClose, onSave }) {
-  const [form, setForm] = useState({ customerName: '', address: '', phone: '', email: '', serviceType: 'General Pest Control', scheduledDate: '', assignedTech: 'Jimmy Manharth', notes: '' })
+  const [form, setForm] = useState({
+    customerName: '',
+    address: '',
+    phone: '',
+    email: '',
+    customerId: null, // set by CustomerPicker when an existing customer is selected
+    serviceType: 'General Pest Control',
+    scheduledDate: '',
+    assignedTech: 'Jimmy Manharth',
+    notes: '',
+  })
   const [saving, setSaving] = useState(false)
 
   const handleSubmit = async (e) => {
@@ -91,9 +261,12 @@ function NewJobModal({ onClose, onSave }) {
       <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b"><h3 className="font-display font-bold text-lg">New Job</h3><button onClick={onClose}><X size={20} /></button></div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {/* Customer Name is now a searchable picker that will auto-fill
+              phone/email/address and link customerId on match. */}
+          <CustomerPicker form={form} setForm={setForm} />
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Customer Name *</label><input required value={form.customerName} onChange={e => setForm({...form, customerName: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
             <div><label className="block text-xs font-medium text-gray-700 mb-1">Phone</label><input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+            <div><label className="block text-xs font-medium text-gray-700 mb-1">Email</label><input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
           </div>
           <div><label className="block text-xs font-medium text-gray-700 mb-1">Address</label><input value={form.address} onChange={e => setForm({...form, address: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
           <div className="grid grid-cols-2 gap-4">
