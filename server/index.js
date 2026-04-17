@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { readJSON, writeJSON } = require('./data-dir');
 const { repo } = require('./repo');
 const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
+const customers = require('./customers');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -156,6 +157,14 @@ app.post('/api/contact', (req, res) => {
   const { name, email, phone, address, service, urgency, message } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone are required.' });
 
+  // Customer management — find an existing household by phone/email or
+  // create a new one. `matched` tells us to flag the lead with the
+  // auto-link banner when the frontend renders it.
+  const match = customers.findOrCreateCustomer(
+    { name, email, phone, address },
+    { actor: 'public_form' }
+  );
+
   const lead = leadsRepo.create(
     {
       name,
@@ -168,10 +177,16 @@ app.post('/api/contact', (req, res) => {
       status: 'new',
       notes: '',
       jobId: null,
+      customerId: match.customer.id,
+      contactId: match.contact?.id || null,
+      autoLinkedCustomerId: match.matched ? match.customer.id : null,
+      matchedBy: match.matchedBy || null,
     },
     {
       actor: 'public_form',
-      description: `New lead from ${name} (${service || 'General'})`,
+      description: match.matched
+        ? `New lead from ${name} — matched to existing customer ${match.customer.displayName} by ${match.matchedBy}`
+        : `New lead from ${name} (${service || 'General'}) — new customer created`,
     }
   );
 
@@ -227,10 +242,29 @@ app.get('/api/admin/jobs', auth, (req, res) => {
 });
 
 app.post('/api/admin/jobs', auth, (req, res) => {
-  const { customerName, address, phone, email, serviceType, scheduledDate, assignedTech, notes, status } = req.body;
+  const { customerName, address, phone, email, serviceType, scheduledDate, assignedTech, notes, status, customerId: providedCustomerId } = req.body;
   if (!customerName || !serviceType) return res.status(400).json({ error: 'Customer name and service type required' });
 
   const actor = actorFromReq(req);
+
+  // Customer resolution. If the caller already knows the customerId
+  // (e.g. from a "New Job for Customer X" flow in the UI) use it as-is.
+  // Otherwise match or create by phone/email.
+  let customerId = providedCustomerId || null;
+  let contactId = null;
+  let autoLinkedCustomerId = null;
+  let matchedBy = null;
+  if (!customerId) {
+    const match = customers.findOrCreateCustomer(
+      { name: customerName, email, phone, address },
+      { actor }
+    );
+    customerId = match.customer.id;
+    contactId = match.contact?.id || null;
+    autoLinkedCustomerId = match.matched ? match.customer.id : null;
+    matchedBy = match.matchedBy || null;
+  }
+
   const job = jobsRepo.create(
     {
       customerName,
@@ -243,10 +277,16 @@ app.post('/api/admin/jobs', auth, (req, res) => {
       notes: notes || '',
       status: status || 'new',
       leadId: null,
+      customerId,
+      contactId,
+      autoLinkedCustomerId,
+      matchedBy,
     },
     {
       actor,
-      description: `New job: ${serviceType} for ${customerName}`,
+      description: autoLinkedCustomerId
+        ? `New job: ${serviceType} for ${customerName} — matched existing customer by ${matchedBy}`
+        : `New job: ${serviceType} for ${customerName}`,
     }
   );
 
@@ -319,6 +359,10 @@ app.post('/api/admin/leads/:id/convert', auth, (req, res) => {
       notes: lead.message || '',
       status: 'new',
       leadId: lead.id,
+      // Customer management — carry the lead's customerId onto the job
+      // so history links continue through the pipeline.
+      customerId: lead.customerId || null,
+      contactId: lead.contactId || null,
     },
     { actor, description: `Lead converted: ${lead.name} → ${lead.service || 'General'} job` }
   );
@@ -452,6 +496,9 @@ function autoDraftInvoiceForJob(job, actor) {
       status: 'draft',
       dueDate,
       paidAt: '',
+      // Carry the job's customerId onto the auto-drafted invoice so the
+      // customer history chain stays intact.
+      customerId: job.customerId || null,
     },
     {
       actor: actor || 'system',
@@ -637,11 +684,28 @@ app.delete('/api/admin/payments/:id', auth, (req, res) => {
 });
 
 app.post('/api/admin/invoices', auth, (req, res) => {
-  const { jobId, customerName, customerEmail, customerAddress, items, notes, dueDate } = req.body;
+  const { jobId, customerName, customerEmail, customerAddress, items, notes, dueDate, customerId: providedCustomerId } = req.body;
   if (!customerName || !items || !items.length) return res.status(400).json({ error: 'Customer name and at least one line item required' });
 
   const { subtotal, tax, total } = computeInvoiceTotals(items);
   const invoiceNumber = nextInvoiceNumber();
+  const actor = actorFromReq(req);
+
+  // Customer resolution — honour explicit customerId, otherwise fall back
+  // to the job's customerId if jobId was supplied, otherwise match/create
+  // by contact fields.
+  let customerId = providedCustomerId || null;
+  if (!customerId && jobId) {
+    const job = jobsRepo.find(jobId);
+    if (job?.customerId) customerId = job.customerId;
+  }
+  if (!customerId) {
+    const match = customers.findOrCreateCustomer(
+      { name: customerName, email: customerEmail, phone: '', address: customerAddress },
+      { actor }
+    );
+    customerId = match.customer.id;
+  }
 
   const invoice = invoicesRepo.create(
     {
@@ -658,9 +722,10 @@ app.post('/api/admin/invoices', auth, (req, res) => {
       status: 'draft',
       dueDate: dueDate || '',
       paidAt: '',
+      customerId,
     },
     {
-      actor: actorFromReq(req),
+      actor,
       description: `Invoice ${invoiceNumber} created for ${customerName} — $${total.toFixed(2)}`,
     }
   );
@@ -831,6 +896,7 @@ app.post('/api/admin/jobs/:id/invoice', auth, (req, res) => {
       status: 'draft',
       dueDate: dueDate || '',
       paidAt: '',
+      customerId: job.customerId || null,
     },
     {
       actor: actorFromReq(req),
@@ -962,6 +1028,91 @@ app.get('/api/admin/audit-log/distinct', auth, (req, res) => {
     return res.status(400).json({ error: `field must be one of ${[...allowed].join(', ')}` });
   }
   res.json({ values: listDistinct(field) });
+});
+
+// ===================
+// CUSTOMERS API
+// ===================
+
+// GET /api/admin/customers — searchable list with inline stats
+app.get('/api/admin/customers', auth, (req, res) => {
+  const q = req.query.q ? String(req.query.q) : '';
+  const sortBy = req.query.sortBy ? String(req.query.sortBy) : 'updatedAt';
+  res.json({ customers: customers.listCustomers({ q, sortBy }) });
+});
+
+// GET /api/admin/customers/:id — full detail: contacts, locations, all
+// leads/jobs/invoices/payments, plus running totals.
+app.get('/api/admin/customers/:id', auth, (req, res) => {
+  const detail = customers.getCustomerDetail(req.params.id);
+  if (!detail) return res.status(404).json({ error: 'Customer not found' });
+  res.json({ customer: detail });
+});
+
+// POST /api/admin/customers — manually create a customer (bypasses the
+// auto-match path; used by the UI's "New Customer" button).
+app.post('/api/admin/customers', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const { displayName, billingAddress, notes, tags, primaryContact, defaultLocation } = req.body;
+  if (!displayName && !primaryContact?.name) {
+    return res.status(400).json({ error: 'displayName or primaryContact.name is required' });
+  }
+  const customer = customers.createCustomer(
+    { displayName, billingAddress, notes, tags, primaryContact, defaultLocation },
+    { actor }
+  );
+  res.json({ success: true, customer });
+});
+
+// PATCH /api/admin/customers/:id — edit core fields (displayName,
+// billingAddress, notes, tags)
+app.patch('/api/admin/customers/:id', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const updated = customers.updateCustomer(req.params.id, req.body, { actor });
+  if (!updated) return res.status(404).json({ error: 'Customer not found' });
+  res.json({ success: true, customer: updated });
+});
+
+// Contacts (sub-resources)
+app.post('/api/admin/customers/:id/contacts', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const contact = customers.addContact(req.params.id, req.body, { actor });
+  res.json({ success: true, contact });
+});
+
+app.patch('/api/admin/customers/:customerId/contacts/:contactId', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const updated = customers.updateContact(req.params.contactId, req.body, { actor });
+  if (!updated) return res.status(404).json({ error: 'Contact not found' });
+  res.json({ success: true, contact: updated });
+});
+
+app.delete('/api/admin/customers/:customerId/contacts/:contactId', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const ok = customers.deleteContact(req.params.contactId, { actor });
+  if (!ok) return res.status(404).json({ error: 'Contact not found' });
+  res.json({ success: true });
+});
+
+// Service locations (sub-resources)
+app.post('/api/admin/customers/:id/locations', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const location = customers.addLocation(req.params.id, req.body, { actor });
+  res.json({ success: true, location });
+});
+
+app.patch('/api/admin/customers/:customerId/locations/:locationId', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const updated = customers.updateLocation(req.params.locationId, req.body, { actor });
+  if (!updated) return res.status(404).json({ error: 'Location not found' });
+  res.json({ success: true, location: updated });
+});
+
+app.delete('/api/admin/customers/:customerId/locations/:locationId', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const ok = customers.deleteLocation(req.params.locationId, { actor });
+  if (!ok) return res.status(404).json({ error: 'Location not found' });
+  res.json({ success: true });
 });
 
 // ===================

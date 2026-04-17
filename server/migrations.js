@@ -16,6 +16,97 @@ const { recordAudit } = require('./audit-helpers');
 
 const MIGRATIONS = [
   {
+    id: 'customers-backfill',
+    description:
+      'Customer management: for every existing lead/job/invoice without a ' +
+      'customerId, match to an existing customer by phone OR email across all ' +
+      'contacts, or create a new household customer if no match. Then stamp ' +
+      'customerId on the record. Idempotent — records already linked are ' +
+      'skipped.',
+    run() {
+      const customersModule = require('./customers');
+      const leadsRepo = repo('leads');
+      const jobsRepo = repo('jobs');
+      const invoicesRepo = repo('invoices');
+      let linkedLeads = 0;
+      let linkedJobs = 0;
+      let linkedInvoices = 0;
+      let customersCreated = 0;
+      const customersBefore = repo('customers').all().length;
+
+      for (const lead of leadsRepo.all()) {
+        if (lead.customerId) continue;
+        const match = customersModule.findOrCreateCustomer(
+          { name: lead.name, email: lead.email, phone: lead.phone, address: lead.address },
+          { actor: 'migration' }
+        );
+        leadsRepo.update(lead.id, {
+          customerId: match.customer.id,
+          contactId: match.contact?.id || null,
+        }, { actor: 'migration', description: `Backfilled customerId on lead ${lead.id.slice(0, 8)}` });
+        linkedLeads++;
+      }
+
+      for (const job of jobsRepo.all()) {
+        if (job.customerId) continue;
+        // Prefer inheriting from the linked lead if present (keeps the
+        // provenance chain consistent when the lead was also backfilled).
+        if (job.leadId) {
+          const parentLead = leadsRepo.find(job.leadId);
+          if (parentLead?.customerId) {
+            jobsRepo.update(job.id, {
+              customerId: parentLead.customerId,
+              contactId: parentLead.contactId || null,
+            }, { actor: 'migration', description: `Backfilled customerId on job ${job.id.slice(0, 8)} from lead` });
+            linkedJobs++;
+            continue;
+          }
+        }
+        const match = customersModule.findOrCreateCustomer(
+          { name: job.customerName, email: job.email, phone: job.phone, address: job.address },
+          { actor: 'migration' }
+        );
+        jobsRepo.update(job.id, {
+          customerId: match.customer.id,
+          contactId: match.contact?.id || null,
+        }, { actor: 'migration', description: `Backfilled customerId on job ${job.id.slice(0, 8)}` });
+        linkedJobs++;
+      }
+
+      for (const inv of invoicesRepo.all()) {
+        if (inv.customerId) continue;
+        // Prefer the job's customerId if the invoice is job-linked.
+        if (inv.jobId) {
+          const parentJob = jobsRepo.find(inv.jobId);
+          if (parentJob?.customerId) {
+            invoicesRepo.update(inv.id, {
+              customerId: parentJob.customerId,
+            }, { actor: 'migration', description: `Backfilled customerId on invoice ${inv.invoiceNumber} from job` });
+            linkedInvoices++;
+            continue;
+          }
+        }
+        const match = customersModule.findOrCreateCustomer(
+          { name: inv.customerName, email: inv.customerEmail, phone: '', address: inv.customerAddress },
+          { actor: 'migration' }
+        );
+        invoicesRepo.update(inv.id, {
+          customerId: match.customer.id,
+        }, { actor: 'migration', description: `Backfilled customerId on invoice ${inv.invoiceNumber}` });
+        linkedInvoices++;
+      }
+
+      customersCreated = repo('customers').all().length - customersBefore;
+
+      return {
+        linkedLeads,
+        linkedJobs,
+        linkedInvoices,
+        customersCreated,
+      };
+    },
+  },
+  {
     id: 'phase-1-3-payments-backfill',
     description:
       'Phase 1.3: for every invoice that was marked paid under the old boolean ' +
