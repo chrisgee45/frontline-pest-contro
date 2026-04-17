@@ -9,6 +9,8 @@ import ContactPage from './pages/ContactPage'
 import AdminLogin from './pages/AdminLogin'
 import AdminDashboard from './pages/AdminDashboard'
 import AdminLeads from './pages/AdminLeads'
+import AdminCustomers from './pages/AdminCustomers'
+import AdminCustomerDetail from './pages/AdminCustomerDetail'
 import AdminJobs from './pages/AdminJobs'
 import AdminInvoices from './pages/AdminInvoices'
 import AdminAccounting from './pages/AdminAccounting'
@@ -31,6 +33,8 @@ function App() {
           <Route path="/admin" element={<AdminLogin />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/admin/leads" element={<AdminLeads />} />
+          <Route path="/admin/customers" element={<AdminCustomers />} />
+          <Route path="/admin/customers/:id" element={<AdminCustomerDetail />} />
           <Route path="/admin/jobs" element={<AdminJobs />} />
           <Route path="/admin/invoices" element={<AdminInvoices />} />
           <Route path="/admin/accounting" element={<AdminAccounting />} />

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, MapPin, Phone, Calendar, User, Trash2, FileText, UserCheck } from 'lucide-react'
+import { Plus, X, MapPin, Phone, Calendar, User, Trash2, FileText, UserCheck, UserSquare } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatDate } from '../hooks/useAdmin'
 
@@ -33,6 +33,13 @@ function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, o
 
       {expanded && (
         <div className="mt-3 pt-3 border-t border-gray-100 space-y-2" onClick={e => e.stopPropagation()}>
+          {job.customerId && (
+            <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-gray-50 border border-gray-200">
+              <UserSquare size={11} className="text-gray-600" />
+              <span className="text-[11px] text-gray-700">Customer record</span>
+              <Link to={`/admin/customers/${job.customerId}`} className="ml-auto text-[10px] font-semibold text-forest-700 hover:text-forest-900 underline">View Customer →</Link>
+            </div>
+          )}
           {job.leadId && (
             <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-green-50 border border-green-200">
               <UserCheck size={11} className="text-green-700" />

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw } from 'lucide-react'
+import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw, UserSquare } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
@@ -241,6 +241,18 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onDelete, onOpenPaymentMo
       </div>
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50 space-y-4">
+          {inv.customerId && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+              <UserSquare size={14} className="text-gray-600" />
+              <span className="text-xs text-gray-700">Customer record</span>
+              <Link
+                to={`/admin/customers/${inv.customerId}`}
+                className="ml-auto text-xs font-semibold text-forest-700 hover:text-forest-900 underline"
+              >
+                View Customer →
+              </Link>
+            </div>
+          )}
           {inv.jobId && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200">
               <Briefcase size={14} className="text-blue-700" />

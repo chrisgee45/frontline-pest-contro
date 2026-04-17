@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Kanban, FileText, Calculator, Users, LogOut, Menu, X, ChevronRight, DollarSign, Receipt, TrendingUp, ClipboardList, BookOpen, Shield, Settings } from 'lucide-react'
+import { LayoutDashboard, Kanban, FileText, Calculator, Users, UserSquare, LogOut, Menu, X, ChevronRight, DollarSign, Receipt, TrendingUp, ClipboardList, BookOpen, Shield, Settings } from 'lucide-react'
 import { LogoIcon } from './Logo'
 
 const navItems = [
   { label: 'Dashboard', to: '/admin/dashboard', icon: LayoutDashboard },
   { label: 'Leads', to: '/admin/leads', icon: Users },
+  { label: 'Customers', to: '/admin/customers', icon: UserSquare },
   { label: 'Jobs', to: '/admin/jobs', icon: Kanban },
   { label: 'Invoices', to: '/admin/invoices', icon: FileText },
   { label: 'Accounting', to: '/admin/accounting', icon: Calculator },
@@ -30,7 +31,10 @@ export default function AdminLayout({ children }) {
     navigate('/admin')
   }
 
-  const isActive = (to) => location.pathname === to
+  // A nav item is active if the current pathname matches exactly OR begins
+  // with `${to}/` (so /admin/customers/abc123 still highlights the
+  // Customers tab and its title renders in the header).
+  const isActive = (to) => location.pathname === to || location.pathname.startsWith(to + '/')
 
   return (
     <div className="min-h-screen bg-gray-50 flex">

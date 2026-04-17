@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Phone, Mail, MapPin, Clock, ChevronDown, ChevronUp, Trash2, ArrowRight, Calendar, Briefcase } from 'lucide-react'
+import { Phone, Mail, MapPin, Clock, ChevronDown, ChevronUp, Trash2, ArrowRight, Calendar, Briefcase, UserSquare, Link2 } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, timeAgo, formatDate } from '../hooks/useAdmin'
 
@@ -48,6 +48,26 @@ function LeadCard({ lead, expanded, onToggle, onUpdate, onDelete, onConvert, car
       </div>
       {expanded && (
         <div className="border-t border-gray-100 p-4 bg-gray-50 space-y-4">
+          {/* Customer-management banners. autoLinkedCustomerId is set when
+              this lead matched an existing customer by phone/email during
+              creation — a softer "heads up" so Jimmy can verify the match
+              is correct. customerId is always present once M backfill runs. */}
+          {lead.autoLinkedCustomerId && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200">
+              <Link2 size={14} className="text-blue-700" />
+              <span className="text-xs text-blue-900">
+                Matched existing customer by {lead.matchedBy || 'contact info'}.
+              </span>
+              <Link to={`/admin/customers/${lead.autoLinkedCustomerId}`} className="ml-auto text-xs font-semibold text-blue-700 hover:text-blue-900 underline">View Customer →</Link>
+            </div>
+          )}
+          {lead.customerId && !lead.autoLinkedCustomerId && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+              <UserSquare size={14} className="text-gray-500" />
+              <span className="text-xs text-gray-700">Part of a customer record.</span>
+              <Link to={`/admin/customers/${lead.customerId}`} className="ml-auto text-xs font-semibold text-forest-700 hover:text-forest-900 underline">View Customer →</Link>
+            </div>
+          )}
           {lead.jobId && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 border border-green-200">
               <Briefcase size={14} className="text-green-700" />
