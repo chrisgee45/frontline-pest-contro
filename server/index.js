@@ -7,6 +7,7 @@ const { readJSON, writeJSON } = require('./data-dir');
 const { repo } = require('./repo');
 const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
 const customers = require('./customers');
+const backup = require('./backup');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -1116,6 +1117,139 @@ app.delete('/api/admin/customers/:customerId/locations/:locationId', auth, (req,
 });
 
 // ===================
+// BACKUP / RESTORE
+// ===================
+// Bearer-token auth on every endpoint. Data is served/received as gzipped
+// JSON — a self-describing single-file format so a downloaded backup can
+// be inspected with `gunzip -c backup.json.gz | jq .` before restoring.
+
+// GET /api/admin/backup/download — streams a gzipped JSON envelope of
+// every .json file in the data directory (excluding _backups/) for
+// one-click manual export. Served with attachment headers so browsers
+// save it instead of rendering it.
+app.get('/api/admin/backup/download', auth, (req, res) => {
+  try {
+    const snapshot = backup.buildBackup();
+    const buf = backup.serializeToGzip(snapshot);
+    const filename = `frontline-backup-${snapshot.timestamp.slice(0, 10)}.json.gz`;
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Backup-File-Count', Object.keys(snapshot.files).length);
+    recordAudit({
+      action: 'download',
+      recordType: 'backup',
+      actor: actorFromReq(req),
+      description: `Downloaded backup — ${Object.keys(snapshot.files).length} files, ${buf.length} bytes`,
+      context: { fileCount: Object.keys(snapshot.files).length, sizeBytes: buf.length },
+    });
+    res.send(buf);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/admin/backup/restore — accepts a gzipped JSON backup in the
+// request body (application/gzip) and re-applies every file. Takes a
+// pre-restore snapshot first so the restore itself is reversible.
+app.post('/api/admin/backup/restore',
+  auth,
+  express.raw({ type: 'application/gzip', limit: '100mb' }),
+  (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: 'Empty request body — upload the .json.gz backup file' });
+      }
+      const envelope = backup.deserializeFromGzip(req.body);
+      const result = backup.restoreBackup(envelope, { takeSnapshotFirst: true });
+      recordAudit({
+        action: 'restore',
+        recordType: 'backup',
+        actor: actorFromReq(req),
+        description: `Restored backup — ${result.restored.length} files overwritten (pre-restore snapshot: ${result.preRestoreSnapshot?.filename || 'none'})`,
+        context: {
+          fileCount: result.restored.length,
+          files: result.restored,
+          preRestoreSnapshot: result.preRestoreSnapshot?.filename || null,
+          backupTimestamp: envelope.timestamp,
+        },
+      });
+      res.json({ success: true, restored: result.restored, preRestoreSnapshot: result.preRestoreSnapshot });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  }
+);
+
+// GET /api/admin/backup/snapshots — list the daily auto-snapshots stored
+// on the volume for the UI's restore-point picker.
+app.get('/api/admin/backup/snapshots', auth, (req, res) => {
+  try {
+    res.json({ snapshots: backup.listSnapshots() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/admin/backup/snapshots/:filename — stream a specific auto-snapshot
+// file as a download so the user can pull one to their machine.
+app.get('/api/admin/backup/snapshots/:filename', auth, (req, res) => {
+  try {
+    const buf = backup.readSnapshot(req.params.filename);
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
+    res.send(buf);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
+// POST /api/admin/backup/snapshots/:filename/restore — restore from a
+// named auto-snapshot without having to download and re-upload it.
+app.post('/api/admin/backup/snapshots/:filename/restore', auth, (req, res) => {
+  try {
+    const buf = backup.readSnapshot(req.params.filename);
+    const envelope = backup.deserializeFromGzip(buf);
+    const result = backup.restoreBackup(envelope, { takeSnapshotFirst: true });
+    recordAudit({
+      action: 'restore',
+      recordType: 'backup',
+      actor: actorFromReq(req),
+      description: `Restored from auto-snapshot ${req.params.filename} — ${result.restored.length} files`,
+      context: {
+        source: req.params.filename,
+        fileCount: result.restored.length,
+        preRestoreSnapshot: result.preRestoreSnapshot?.filename || null,
+      },
+    });
+    res.json({ success: true, restored: result.restored, source: req.params.filename, preRestoreSnapshot: result.preRestoreSnapshot });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/admin/backup/snapshot — trigger a manual snapshot on demand
+// (useful before risky admin actions; user can also just click
+// Download Backup, but an in-place snapshot is zero-click and sticks on
+// the volume for later rollback).
+app.post('/api/admin/backup/snapshot', auth, (req, res) => {
+  try {
+    const label = (req.body?.label || 'manual').slice(0, 40);
+    const snapshot = backup.writeAutoSnapshot(label);
+    recordAudit({
+      action: 'create',
+      recordType: 'backup_snapshot',
+      recordId: snapshot.filename,
+      actor: actorFromReq(req),
+      description: `Created manual snapshot ${snapshot.filename}`,
+      context: snapshot,
+    });
+    res.json({ success: true, snapshot });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ===================
 // ACCOUNTING SYSTEM (Double-Entry Ledger)
 // ===================
 const { createAccountingRoutes } = require('./accounting-routes');
@@ -1141,9 +1275,11 @@ try {
 }
 
 // Only listen when run directly — lets integration tests require this module
-// without starting a server on the real port.
+// without starting a server on the real port. The backup scheduler is also
+// gated here so tests don't leak a 24-hour interval timer.
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Frontline API server running on port ${PORT}`));
+  backup.startAutoSnapshotScheduler();
 }
 
 module.exports = app;
