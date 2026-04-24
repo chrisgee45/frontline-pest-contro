@@ -57,7 +57,7 @@ export default function Footer() {
               <li>
                 <a href="tel:3488688231" className="flex items-center gap-2 hover:text-white transition-colors">
                   <Phone size={16} className="text-forest-500" />
-                  Jarret — 348-868-8231
+                  Jarrett — 348-868-8231
                 </a>
               </li>
               <li>

@@ -31,7 +31,7 @@ export default function ServiceArea() {
                 </a>
                 <a href="tel:3488688231" className="btn-cta">
                   <Phone size={20} />
-                  Call Jarret 348-868-8231
+                  Call Jarrett 348-868-8231
                 </a>
               </div>
               <a href="#contact" className="inline-flex items-center justify-center gap-2 bg-transparent border-2 border-white/30 hover:border-white/60 text-white font-semibold px-6 py-3 rounded-lg transition-colors self-center sm:self-start">

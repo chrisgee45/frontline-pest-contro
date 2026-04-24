@@ -181,7 +181,7 @@ export default function ServicesPage() {
               </a>
               <a href="tel:3488688231" className="btn-cta">
                 <Phone size={20} />
-                Call Jarret 348-868-8231
+                Call Jarrett 348-868-8231
               </a>
             </div>
             <Link to="/contact" className="btn-secondary text-lg py-4 px-8">

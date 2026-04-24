@@ -79,7 +79,7 @@ export default function ContactPage() {
                       <Phone className="text-forest-700 group-hover:text-white transition-colors" size={22} />
                     </div>
                     <div>
-                      <div className="font-semibold text-charcoal-900">Call Jarret — 348-868-8231</div>
+                      <div className="font-semibold text-charcoal-900">Call Jarrett — 348-868-8231</div>
                       <div className="text-sm text-gray-500">Call us directly</div>
                     </div>
                   </a>

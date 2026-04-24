@@ -45,7 +45,7 @@ export default function Hero() {
               </a>
               <a href="tel:3488688231" className="btn-cta">
                 <Phone size={22} />
-                Call Jarret 348-868-8231
+                Call Jarrett 348-868-8231
               </a>
             </div>
             <a href="#contact" className="btn-secondary text-lg py-4 px-8 self-stretch sm:self-center justify-center">

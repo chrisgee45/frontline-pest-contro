@@ -30,7 +30,7 @@ export default function Header() {
             </a>
             <span className="text-white/40">·</span>
             <a href="tel:3488688231" className="flex items-center gap-1.5 hover:text-amber-300 transition-colors">
-              Jarret 348-868-8231
+              Jarrett 348-868-8231
             </a>
           </div>
         </div>
@@ -63,7 +63,7 @@ export default function Header() {
             ))}
           </nav>
 
-          {/* Desktop CTA — two stacked phone links so Jimmy and Jarret
+          {/* Desktop CTA — two stacked phone links so Jimmy and Jarrett
               both fit without pushing the Free Quote button off-row. */}
           <div className="hidden lg:flex items-center gap-4">
             <div className="flex flex-col items-end leading-tight">
@@ -73,7 +73,7 @@ export default function Header() {
               </a>
               <a href="tel:3488688231" className="flex items-center gap-1.5 text-white text-sm font-semibold hover:text-amber-400 transition-colors mt-0.5">
                 <Phone size={14} />
-                Jarret — 348-868-8231
+                Jarrett — 348-868-8231
               </a>
             </div>
             <Link to="/contact" className="btn-primary text-sm py-2.5 px-5">
@@ -114,7 +114,7 @@ export default function Header() {
             </a>
             <a href="tel:3488688231" className="btn-primary justify-center">
               <Phone size={18} />
-              Call Jarret — 348-868-8231
+              Call Jarrett — 348-868-8231
             </a>
           </nav>
         </div>
