@@ -33,8 +33,11 @@ export default function Hero() {
           </p>
 
           {/* CTAs — two call buttons side-by-side, then Get a Free Quote
-              centered on its own row beneath them. */}
-          <div className="flex flex-col items-start gap-4 mb-10">
+              centered directly beneath them. Shrinks the wrapper to
+              match the phone-row width on desktop (w-fit) so self-center
+              on the Free Quote lines up with the midpoint of the two
+              phone buttons rather than the full hero column. */}
+          <div className="flex flex-col items-start gap-4 mb-10 w-full sm:w-fit">
             <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
               <a href="tel:4055311034" className="btn-cta">
                 <Phone size={22} />
@@ -45,7 +48,7 @@ export default function Hero() {
                 Call Jarret 348-868-8231
               </a>
             </div>
-            <a href="#contact" className="btn-secondary text-lg py-4 px-8 self-stretch sm:self-auto justify-center">
+            <a href="#contact" className="btn-secondary text-lg py-4 px-8 self-stretch sm:self-center justify-center">
               <FileText size={20} />
               Get a Free Quote
             </a>
