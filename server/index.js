@@ -8,6 +8,7 @@ const { repo } = require('./repo');
 const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
 const customers = require('./customers');
 const services = require('./services');
+const technicians = require('./technicians');
 const stripeLib = require('./stripe');
 const payLinks = require('./pay-links');
 const backup = require('./backup');
@@ -1911,6 +1912,56 @@ app.post('/api/admin/services/seed', auth, (req, res) => {
   const actor = actorFromReq(req);
   const result = services.seedStarterCatalog({ actor });
   res.json({ success: true, ...result });
+});
+
+// ===================
+// TECHNICIANS API
+// ===================
+// The list of people who can be assigned to jobs (Jimmy, Jarrett,
+// helpers, 1099 contractors). Jobs still store assignedTech as a
+// string — the Technician dropdown just writes the selected name into
+// that field. Inactive techs don't appear in the picker but their
+// history stays intact.
+
+// Seed Jimmy on first boot so the picker isn't empty and existing
+// jobs that said "Jimmy Manharth" still line up with a real record.
+try {
+  technicians.seedOwnerIfEmpty({ actor: 'system' });
+} catch (err) {
+  console.warn('[technicians] seed-owner failed:', err.message);
+}
+
+app.get('/api/admin/technicians', auth, (req, res) => {
+  const includeInactive = req.query.includeInactive === 'true';
+  res.json({ technicians: technicians.listTechnicians({ includeInactive }) });
+});
+
+app.post('/api/admin/technicians', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const tech = technicians.createTechnician(req.body, { actor });
+    res.json({ success: true, technician: tech });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/technicians/:id', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const tech = technicians.updateTechnician(req.params.id, req.body, { actor });
+    if (!tech) return res.status(404).json({ error: 'Technician not found' });
+    res.json({ success: true, technician: tech });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/technicians/:id', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const ok = technicians.deleteTechnician(req.params.id, { actor });
+  if (!ok) return res.status(404).json({ error: 'Technician not found' });
+  res.json({ success: true });
 });
 
 // ===================

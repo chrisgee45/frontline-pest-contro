@@ -285,6 +285,18 @@ function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, o
 // fields plus the LineItemsEditor — the wrapper modals decide the title,
 // submit label, and whether the customer picker is shown.
 function JobFormFields({ form, setForm, showCustomerPicker }) {
+  // Load the technicians list once per modal open. Inactive ones are
+  // hidden from the picker but their name stays on old jobs.
+  const [techs, setTechs] = useState([])
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const res = await adminFetch('/api/admin/technicians')
+      if (!cancelled && res?.technicians) setTechs(res.technicians)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <>
       {showCustomerPicker
@@ -316,7 +328,50 @@ function JobFormFields({ form, setForm, showCustomerPicker }) {
         </div>
         <div><label className="block text-xs font-medium text-gray-700 mb-1">Scheduled Date</label><input type="date" value={form.scheduledDate} onChange={e => setForm({...form, scheduledDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
       </div>
-      <div><label className="block text-xs font-medium text-gray-700 mb-1">Assigned Technician</label><input value={form.assignedTech} onChange={e => setForm({...form, assignedTech: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+      <div>
+        <label className="block text-xs font-medium text-gray-700 mb-1">Assigned Technician</label>
+        {techs.length > 0 ? (
+          <>
+            <select
+              value={form.assignedTech}
+              onChange={e => {
+                if (e.target.value === '__manage__') {
+                  // Escape hatch: open the technicians page in a new tab
+                  // so Jimmy can add someone without losing his place.
+                  window.open('/admin/technicians', '_blank')
+                  return
+                }
+                setForm({ ...form, assignedTech: e.target.value })
+              }}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-forest-500 outline-none"
+            >
+              {/* Preserve the current value even if it's no longer in the
+                  active list (e.g., a retired tech on an old job). */}
+              {form.assignedTech && !techs.some(t => t.name === form.assignedTech) && (
+                <option value={form.assignedTech}>{form.assignedTech} (inactive)</option>
+              )}
+              {techs.map(t => (
+                <option key={t.id} value={t.name}>
+                  {t.name}{t.role === 'owner' ? ' (owner)' : ''}
+                </option>
+              ))}
+              <option disabled>──────────</option>
+              <option value="__manage__">+ Add/Manage Technicians…</option>
+            </select>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              Manage the full list on the <Link to="/admin/technicians" className="underline">Technicians</Link> page.
+            </p>
+          </>
+        ) : (
+          // Fall back to free-text input if the technicians list hasn't
+          // loaded yet or the API is unreachable — never block the form.
+          <input
+            value={form.assignedTech}
+            onChange={e => setForm({ ...form, assignedTech: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+          />
+        )}
+      </div>
 
       {/* Line items — the actual services + pricing that will drive the
           invoice when this job is marked completed. */}

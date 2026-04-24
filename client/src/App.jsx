@@ -12,6 +12,7 @@ import AdminLeads from './pages/AdminLeads'
 import AdminCustomers from './pages/AdminCustomers'
 import AdminCustomerDetail from './pages/AdminCustomerDetail'
 import AdminJobs from './pages/AdminJobs'
+import AdminTechnicians from './pages/AdminTechnicians'
 import AdminServices from './pages/AdminServices'
 import AdminInvoices from './pages/AdminInvoices'
 import AdminPayLinks from './pages/AdminPayLinks'
@@ -39,6 +40,7 @@ function App() {
           <Route path="/admin/customers" element={<AdminCustomers />} />
           <Route path="/admin/customers/:id" element={<AdminCustomerDetail />} />
           <Route path="/admin/jobs" element={<AdminJobs />} />
+          <Route path="/admin/technicians" element={<AdminTechnicians />} />
           <Route path="/admin/services" element={<AdminServices />} />
           <Route path="/admin/invoices" element={<AdminInvoices />} />
           <Route path="/admin/pay-links" element={<AdminPayLinks />} />

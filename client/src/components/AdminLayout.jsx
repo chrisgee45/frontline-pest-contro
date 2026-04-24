@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Kanban, FileText, Calculator, Users, UserSquare, LogOut, Menu, X, ChevronRight, DollarSign, Receipt, TrendingUp, ClipboardList, BookOpen, Shield, Settings, Package, Link2 } from 'lucide-react'
+import { LayoutDashboard, Kanban, FileText, Calculator, Users, UserSquare, LogOut, Menu, X, ChevronRight, DollarSign, Receipt, TrendingUp, ClipboardList, BookOpen, Shield, Settings, Package, Link2, HardHat } from 'lucide-react'
 import { LogoIcon } from './Logo'
 
 const navItems = [
@@ -8,6 +8,7 @@ const navItems = [
   { label: 'Leads', to: '/admin/leads', icon: Users },
   { label: 'Customers', to: '/admin/customers', icon: UserSquare },
   { label: 'Jobs', to: '/admin/jobs', icon: Kanban },
+  { label: 'Technicians', to: '/admin/technicians', icon: HardHat },
   { label: 'Services', to: '/admin/services', icon: Package },
   { label: 'Invoices', to: '/admin/invoices', icon: FileText },
   { label: 'Pay Links', to: '/admin/pay-links', icon: Link2 },
