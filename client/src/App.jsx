@@ -13,6 +13,7 @@ import AdminCustomers from './pages/AdminCustomers'
 import AdminCustomerDetail from './pages/AdminCustomerDetail'
 import AdminJobs from './pages/AdminJobs'
 import AdminTechnicians from './pages/AdminTechnicians'
+import AdminMileage from './pages/AdminMileage'
 import AdminServices from './pages/AdminServices'
 import AdminInvoices from './pages/AdminInvoices'
 import AdminPayLinks from './pages/AdminPayLinks'
@@ -41,6 +42,7 @@ function App() {
           <Route path="/admin/customers/:id" element={<AdminCustomerDetail />} />
           <Route path="/admin/jobs" element={<AdminJobs />} />
           <Route path="/admin/technicians" element={<AdminTechnicians />} />
+          <Route path="/admin/mileage" element={<AdminMileage />} />
           <Route path="/admin/services" element={<AdminServices />} />
           <Route path="/admin/invoices" element={<AdminInvoices />} />
           <Route path="/admin/pay-links" element={<AdminPayLinks />} />

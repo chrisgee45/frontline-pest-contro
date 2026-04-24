@@ -9,6 +9,7 @@ const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
 const customers = require('./customers');
 const services = require('./services');
 const technicians = require('./technicians');
+const mileage = require('./mileage');
 const stripeLib = require('./stripe');
 const payLinks = require('./pay-links');
 const backup = require('./backup');
@@ -1961,6 +1962,68 @@ app.delete('/api/admin/technicians/:id', auth, (req, res) => {
   const actor = actorFromReq(req);
   const ok = technicians.deleteTechnician(req.params.id, { actor });
   if (!ok) return res.status(404).json({ error: 'Technician not found' });
+  res.json({ success: true });
+});
+
+// ===================
+// MILEAGE LOG API
+// ===================
+// Business-vehicle mileage tracking for the IRS standard-mileage-rate
+// deduction (Schedule C line 9). IRS requires a contemporaneous log
+// with date, miles, and business purpose — so `purpose` is required.
+
+app.get('/api/admin/mileage', auth, (req, res) => {
+  const year = req.query.year ? Number(req.query.year) : null;
+  res.json({ entries: mileage.listMileage({ year }) });
+});
+
+app.get('/api/admin/mileage/summary', auth, (req, res) => {
+  const year = Number(req.query.year) || new Date().getUTCFullYear();
+  res.json({ summary: mileage.getMileageSummary(year) });
+});
+
+app.get('/api/admin/mileage/settings', auth, (req, res) => {
+  res.json({ settings: mileage.getSettings() });
+});
+
+app.put('/api/admin/mileage/settings', auth, (req, res) => {
+  const next = mileage.saveSettings(req.body || {});
+  res.json({ success: true, settings: next });
+});
+
+app.get('/api/admin/mileage/csv', auth, (req, res) => {
+  const year = Number(req.query.year) || new Date().getUTCFullYear();
+  const csv = mileage.renderMileageCSV(year);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="frontline-mileage-${year}.csv"`);
+  res.send(csv);
+});
+
+app.post('/api/admin/mileage', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const entry = mileage.createMileageEntry(req.body, { actor });
+    res.json({ success: true, entry });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/mileage/:id', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const entry = mileage.updateMileageEntry(req.params.id, req.body, { actor });
+    if (!entry) return res.status(404).json({ error: 'Mileage entry not found' });
+    res.json({ success: true, entry });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/mileage/:id', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const ok = mileage.deleteMileageEntry(req.params.id, { actor });
+  if (!ok) return res.status(404).json({ error: 'Mileage entry not found' });
   res.json({ success: true });
 });
 
