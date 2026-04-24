@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, X, Pencil, Trash2, Package, Sparkles, Eye, EyeOff } from 'lucide-react'
+import { Plus, X, Pencil, Trash2, Package, Sparkles, Eye, EyeOff, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency } from '../hooks/useAdmin'
 
@@ -147,12 +147,19 @@ export default function AdminServices() {
   const [editing, setEditing] = useState(null)
   const [showInactive, setShowInactive] = useState(false)
   const [seeding, setSeeding] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [stripeStatus, setStripeStatus] = useState({ configured: false, mode: 'unconfigured' })
+  const [rowSyncing, setRowSyncing] = useState(null) // id of service currently syncing
   const navigate = useNavigate()
 
   const fetchServices = useCallback(async () => {
     if (!getToken()) { navigate('/admin'); return }
-    const res = await adminFetch(`/api/admin/services?includeInactive=${showInactive}`)
-    if (res?.services) setServices(res.services)
+    const [svcRes, stripeRes] = await Promise.all([
+      adminFetch(`/api/admin/services?includeInactive=${showInactive}`),
+      adminFetch('/api/admin/stripe/status'),
+    ])
+    if (svcRes?.services) setServices(svcRes.services)
+    if (stripeRes) setStripeStatus(stripeRes)
     setLoading(false)
   }, [navigate, showInactive])
 
@@ -189,6 +196,44 @@ export default function AdminServices() {
     fetchServices()
   }
 
+  // Sync all services to Stripe. Creates matching Products + Prices for
+  // any service that doesn't yet have a stripeProductId. Safe to click
+  // repeatedly — already-synced services are skipped.
+  const syncAllToStripe = async () => {
+    if (!stripeStatus.configured) {
+      alert('Stripe is not configured yet. Add STRIPE_SECRET_KEY to Railway first.')
+      return
+    }
+    if (!confirm('Sync all unsynced services to Stripe? This creates matching Products + Prices in Jimmy\'s Stripe dashboard.')) return
+    setSyncing(true)
+    const res = await adminFetch('/api/admin/services/sync-all', { method: 'POST' })
+    setSyncing(false)
+    if (res?.success) {
+      const parts = []
+      if (res.synced > 0) parts.push(`${res.synced} synced`)
+      if (res.skipped > 0) parts.push(`${res.skipped} already synced (skipped)`)
+      if (res.errors?.length > 0) parts.push(`${res.errors.length} errors — check the console`)
+      alert(parts.join(', ') || 'Nothing to sync.')
+      if (res.errors?.length > 0) console.error('[stripe sync-all] errors:', res.errors)
+    } else {
+      alert(`Sync failed: ${res?.error || 'unknown error'}`)
+    }
+    fetchServices()
+  }
+
+  // Sync a single service. Used for rows that errored out, or for
+  // services created before Stripe was configured.
+  const syncOneToStripe = async (id) => {
+    if (!stripeStatus.configured) return
+    setRowSyncing(id)
+    const res = await adminFetch(`/api/admin/services/${id}/sync`, { method: 'POST' })
+    setRowSyncing(null)
+    if (!res?.success) {
+      alert(`Sync failed: ${res?.error || 'unknown error'}`)
+    }
+    fetchServices()
+  }
+
   // Group by category for a nicer table view.
   const grouped = useMemo(() => {
     const groups = {}
@@ -199,6 +244,10 @@ export default function AdminServices() {
     }
     return groups
   }, [services])
+
+  // Stripe sync counters for the header banner
+  const unsyncedCount = services.filter(s => !s.stripeProductId).length
+  const syncedCount = services.length - unsyncedCount
 
   const isEmpty = !loading && services.length === 0
 
@@ -211,7 +260,7 @@ export default function AdminServices() {
           <h2 className="font-display font-bold text-xl text-charcoal-900">Services Catalog</h2>
           <p className="text-sm text-gray-500 mt-0.5">Services &amp; default prices that appear in the Job and Invoice line-item pickers.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => setShowInactive(v => !v)}
             className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 hover:bg-gray-100 inline-flex items-center gap-1"
@@ -225,11 +274,52 @@ export default function AdminServices() {
               <Sparkles size={14} />{seeding ? 'Seeding…' : 'Seed Starter Services'}
             </button>
           )}
+          {stripeStatus.configured && unsyncedCount > 0 && (
+            <button
+              onClick={syncAllToStripe}
+              disabled={syncing}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-100 border border-purple-200 text-purple-900 hover:bg-purple-200 inline-flex items-center gap-1 disabled:opacity-50"
+              title="Create matching Stripe Products + Prices for any un-synced services"
+            >
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : `Sync ${unsyncedCount} to Stripe`}
+            </button>
+          )}
           <button onClick={() => setShowNew(true)} className="btn-primary text-xs py-1.5 px-3">
             <Plus size={14} />New Service
           </button>
         </div>
       </div>
+
+      {/* Stripe status banner — so Jimmy knows where he stands at a glance */}
+      {!loading && services.length > 0 && (
+        stripeStatus.configured ? (
+          <div className={`mb-4 rounded-lg border px-4 py-2.5 flex items-center gap-3 text-sm ${
+            unsyncedCount === 0
+              ? 'bg-green-50 border-green-200 text-green-900'
+              : 'bg-purple-50 border-purple-200 text-purple-900'
+          }`}>
+            {unsyncedCount === 0
+              ? <CheckCircle2 size={16} className="text-green-600 shrink-0" />
+              : <AlertCircle size={16} className="text-purple-600 shrink-0" />
+            }
+            <div className="flex-1 min-w-0">
+              <strong>Stripe {stripeStatus.mode === 'live' ? 'LIVE' : 'test'} mode.</strong>{' '}
+              {unsyncedCount === 0
+                ? `All ${syncedCount} services are synced — they appear in Jimmy's Stripe dashboard as Products.`
+                : `${syncedCount} synced, ${unsyncedCount} not yet synced. Click "Sync ${unsyncedCount} to Stripe" to push them.`
+              }
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 flex items-center gap-3 text-sm text-amber-900">
+            <AlertCircle size={16} className="text-amber-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <strong>Stripe is not configured.</strong> Services work locally, but they won't appear in Stripe until you add <code className="text-[11px] bg-amber-100 px-1 py-0.5 rounded">STRIPE_SECRET_KEY</code> to Railway environment variables.
+            </div>
+          </div>
+        )
+      )}
 
       {isEmpty ? (
         <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
@@ -286,11 +376,21 @@ export default function AdminServices() {
                         </td>
                         <td className="px-4 py-3 text-center hidden lg:table-cell">
                           {s.stripeProductId ? (
-                            <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-800" title={`Product: ${s.stripeProductId}`}>
-                              Synced
+                            <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-800" title={`Stripe Product: ${s.stripeProductId}`}>
+                              <CheckCircle2 size={10} className="inline mr-0.5" />Synced
                             </span>
+                          ) : stripeStatus.configured ? (
+                            <button
+                              onClick={() => syncOneToStripe(s.id)}
+                              disabled={rowSyncing === s.id}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 disabled:opacity-50"
+                              title="Create matching Stripe Product + Price"
+                            >
+                              <RefreshCw size={10} className={rowSyncing === s.id ? 'animate-spin' : ''} />
+                              {rowSyncing === s.id ? 'Syncing…' : 'Sync'}
+                            </button>
                           ) : (
-                            <span className="text-[10px] text-gray-400">Not synced</span>
+                            <span className="text-[10px] text-gray-400">—</span>
                           )}
                         </td>
                         <td className="px-4 py-3">

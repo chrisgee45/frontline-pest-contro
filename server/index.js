@@ -8,6 +8,7 @@ const { repo } = require('./repo');
 const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
 const customers = require('./customers');
 const services = require('./services');
+const stripeLib = require('./stripe');
 const backup = require('./backup');
 
 const app = express();
@@ -1238,26 +1239,71 @@ app.get('/api/admin/services', auth, (req, res) => {
 
 // POST /api/admin/services — add a service to the catalog.
 // Body: { name, description, defaultPrice, category, active }
-app.post('/api/admin/services', auth, (req, res) => {
+// If Stripe is configured, also creates a matching Product + Price in
+// Stripe and stamps the IDs back on the service. A sync failure doesn't
+// prevent the local create — the service exists without Stripe linkage
+// and can be re-synced later from the UI.
+app.post('/api/admin/services', auth, async (req, res) => {
   try {
     const actor = actorFromReq(req);
     const service = services.createService(req.body, { actor });
-    // TODO Commit 4: if Stripe is configured, provision a matching
-    // Product + Price and stamp stripeProductId/stripePriceId on the service.
+
+    if (stripeLib.isConfigured()) {
+      try {
+        const ids = await stripeLib.syncServiceToStripe(service);
+        const synced = services.updateService(service.id, ids, {
+          actor: 'stripe-sync',
+          description: `Auto-synced "${service.name}" to Stripe (product: ${ids.stripeProductId})`,
+        });
+        return res.json({ success: true, service: synced });
+      } catch (syncErr) {
+        console.error('[stripe] auto-sync on create failed:', syncErr.message);
+        return res.json({
+          success: true,
+          service,
+          stripeSyncError: syncErr.message,
+        });
+      }
+    }
+
     res.json({ success: true, service });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// PATCH /api/admin/services/:id — edit a service. Any change to name,
-// description, or defaultPrice re-flags the service for Stripe re-sync
-// (actual sync happens in Commit 4 when the Stripe SDK is wired up).
-app.patch('/api/admin/services/:id', auth, (req, res) => {
+// PATCH /api/admin/services/:id — edit a service. When Stripe is
+// configured and the price/name/description actually changed, this
+// re-syncs to Stripe: a price change creates a new (immutable) Stripe
+// Price and archives the old; metadata changes update the Product
+// in place.
+app.patch('/api/admin/services/:id', auth, async (req, res) => {
   try {
     const actor = actorFromReq(req);
     const updated = services.updateService(req.params.id, req.body, { actor });
     if (!updated) return res.status(404).json({ error: 'Service not found' });
+
+    // Only re-sync if the service itself re-flagged for sync (that
+    // happens inside updateService when name/description/price change).
+    const needsSync = !updated.stripeSyncedAt;
+    if (needsSync && stripeLib.isConfigured()) {
+      try {
+        const ids = await stripeLib.syncServiceToStripe(updated);
+        const synced = services.updateService(updated.id, ids, {
+          actor: 'stripe-sync',
+          description: `Re-synced "${updated.name}" to Stripe (price: ${ids.stripePriceId})`,
+        });
+        return res.json({ success: true, service: synced });
+      } catch (syncErr) {
+        console.error('[stripe] auto-sync on update failed:', syncErr.message);
+        return res.json({
+          success: true,
+          service: updated,
+          stripeSyncError: syncErr.message,
+        });
+      }
+    }
+
     res.json({ success: true, service: updated });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1267,11 +1313,87 @@ app.patch('/api/admin/services/:id', auth, (req, res) => {
 // DELETE /api/admin/services/:id — remove a service from the catalog.
 // (Existing invoices/jobs that referenced this service keep their copies
 // of the description/rate; they're free-standing values, not foreign keys.)
-app.delete('/api/admin/services/:id', auth, (req, res) => {
+// Archives the matching Stripe Product + Price if they exist — Stripe
+// doesn't allow hard-deletion of products once they've been used on an
+// invoice, so archive is the only available operation.
+app.delete('/api/admin/services/:id', auth, async (req, res) => {
   const actor = actorFromReq(req);
+  const service = services.getService(req.params.id);
+  if (!service) return res.status(404).json({ error: 'Service not found' });
+
+  if (stripeLib.isConfigured() && service.stripeProductId) {
+    try {
+      await stripeLib.archiveServiceInStripe(service);
+    } catch (err) {
+      console.error('[stripe] archive on delete failed:', err.message);
+      // Don't block the local delete — Jimmy can clean up in Stripe manually.
+    }
+  }
+
   const ok = services.deleteService(req.params.id, { actor });
   if (!ok) return res.status(404).json({ error: 'Service not found' });
   res.json({ success: true });
+});
+
+// POST /api/admin/services/:id/sync — manually re-sync one service to
+// Stripe. Useful if the auto-sync failed transiently or the service was
+// created before STRIPE_SECRET_KEY was configured.
+app.post('/api/admin/services/:id/sync', auth, async (req, res) => {
+  if (!stripeLib.isConfigured()) {
+    return res.status(400).json({ error: 'Stripe is not configured' });
+  }
+  const service = services.getService(req.params.id);
+  if (!service) return res.status(404).json({ error: 'Service not found' });
+  try {
+    const ids = await stripeLib.syncServiceToStripe(service);
+    const synced = services.updateService(service.id, ids, {
+      actor: 'stripe-sync',
+      description: `Manually synced "${service.name}" to Stripe`,
+    });
+    res.json({ success: true, service: synced });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/services/sync-all — bulk-backfill every service that
+// doesn't yet have a Stripe product, or whose stripeSyncedAt is null
+// (i.e. has drifted since last sync). Useful for the initial Stripe
+// setup after seeding.
+app.post('/api/admin/services/sync-all', auth, async (req, res) => {
+  if (!stripeLib.isConfigured()) {
+    return res.status(400).json({ error: 'Stripe is not configured' });
+  }
+  const all = services.listServices({ includeInactive: true });
+  const results = { synced: 0, skipped: 0, errors: [] };
+  for (const service of all) {
+    if (service.stripeProductId && service.stripeSyncedAt) {
+      results.skipped++;
+      continue;
+    }
+    try {
+      const ids = await stripeLib.syncServiceToStripe(service);
+      services.updateService(service.id, ids, {
+        actor: 'stripe-sync',
+        description: `Bulk-synced "${service.name}" to Stripe`,
+      });
+      results.synced++;
+    } catch (err) {
+      results.errors.push({ id: service.id, name: service.name, error: err.message });
+    }
+  }
+  res.json({ success: true, ...results });
+});
+
+// GET /api/admin/stripe/status — reports whether Stripe is wired up and
+// which mode (test vs live). Used by the admin UI to decide whether to
+// show sync buttons.
+app.get('/api/admin/stripe/status', auth, (req, res) => {
+  res.json({
+    configured: stripeLib.isConfigured(),
+    mode: stripeLib.mode(),
+    publishableKey: stripeLib.STRIPE_PUBLISHABLE_KEY || null,
+  });
 });
 
 // POST /api/admin/services/seed — seed the catalog with a starter set of
