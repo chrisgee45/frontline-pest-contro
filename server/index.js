@@ -469,9 +469,25 @@ app.get('/api/admin/invoices', auth, (req, res) => {
   res.json({ invoices: invoicesRepo.all().map(enrichInvoice) });
 });
 
-function computeInvoiceTotals(items) {
+// Default tax rate for new invoices (Oklahoma sales tax ballpark).
+// Individual invoices can override this with a per-row taxRate field so
+// Jimmy can null it out for exempt customers or nudge it up for a
+// specific jurisdiction without changing the global.
+const DEFAULT_TAX_RATE = 0.085;
+
+function normalizeTaxRate(rate) {
+  const n = Number(rate);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_TAX_RATE;
+  // Allow 0-1 as a fraction (0.085) or >=1 as a percentage (8.5) — if the
+  // UI accidentally sends 8.5 instead of 0.085, divide by 100 so totals
+  // don't blow up.
+  return n > 1 ? n / 100 : n;
+}
+
+function computeInvoiceTotals(items, taxRate = DEFAULT_TAX_RATE) {
+  const rate = normalizeTaxRate(taxRate);
   const subtotal = items.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.rate)), 0);
-  const tax = Math.round(subtotal * 0.085 * 100) / 100; // 8.5% OK sales tax
+  const tax = Math.round(subtotal * rate * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
   return { subtotal: Math.round(subtotal * 100) / 100, tax, total };
 }
@@ -513,7 +529,8 @@ function autoDraftInvoiceForJob(job, actor) {
         serviceId: li.serviceId || null,
       }))
     : [{ description: job.serviceType || 'Service', quantity: 1, rate: 0 }];
-  const { subtotal, tax, total } = computeInvoiceTotals(items);
+  const taxRate = DEFAULT_TAX_RATE;
+  const { subtotal, tax, total } = computeInvoiceTotals(items, taxRate);
   const invoiceNumber = nextInvoiceNumber();
 
   const due = new Date();
@@ -531,6 +548,7 @@ function autoDraftInvoiceForJob(job, actor) {
       notes: '',
       subtotal,
       tax,
+      taxRate,
       total,
       status: 'draft',
       dueDate,
@@ -725,10 +743,11 @@ app.delete('/api/admin/payments/:id', auth, (req, res) => {
 });
 
 app.post('/api/admin/invoices', auth, (req, res) => {
-  const { jobId, customerName, customerEmail, customerAddress, items, notes, dueDate, customerId: providedCustomerId } = req.body;
+  const { jobId, customerName, customerEmail, customerAddress, items, notes, dueDate, taxRate, customerId: providedCustomerId } = req.body;
   if (!customerName || !items || !items.length) return res.status(400).json({ error: 'Customer name and at least one line item required' });
 
-  const { subtotal, tax, total } = computeInvoiceTotals(items);
+  const effectiveTaxRate = taxRate !== undefined ? normalizeTaxRate(taxRate) : DEFAULT_TAX_RATE;
+  const { subtotal, tax, total } = computeInvoiceTotals(items, effectiveTaxRate);
   const invoiceNumber = nextInvoiceNumber();
   const actor = actorFromReq(req);
 
@@ -759,6 +778,7 @@ app.post('/api/admin/invoices', auth, (req, res) => {
       notes: notes || '',
       subtotal,
       tax,
+      taxRate: effectiveTaxRate,
       total,
       status: 'draft',
       dueDate: dueDate || '',
@@ -781,6 +801,47 @@ app.patch('/api/admin/invoices/:id', auth, (req, res) => {
   const actor = actorFromReq(req);
   const patch = {};
   if (req.body.notes !== undefined) patch.notes = req.body.notes;
+  if (req.body.dueDate !== undefined) patch.dueDate = req.body.dueDate || '';
+  if (req.body.customerName !== undefined) patch.customerName = req.body.customerName;
+  if (req.body.customerEmail !== undefined) patch.customerEmail = req.body.customerEmail || '';
+  if (req.body.customerAddress !== undefined) patch.customerAddress = req.body.customerAddress || '';
+
+  // Line items and tax rate — if either is being edited, recompute totals
+  // from the final state. Uses the patched items + taxRate if present,
+  // falling back to the stored values on the invoice otherwise. We also
+  // re-sanitise items through the same shape we use on jobs so a stray
+  // field from the UI can't pollute the stored rows.
+  const editsTotals =
+    req.body.items !== undefined ||
+    req.body.taxRate !== undefined;
+  if (editsTotals) {
+    // Guardrail: once money has changed hands on an invoice, the totals
+    // are locked. Jimmy has to void the payment(s) first if he really
+    // needs to amend the services. This protects the accounting ledger
+    // from going out of sync with payment records.
+    const { paidAmount } = getInvoiceTotals(inv);
+    if (paidAmount > 0.005) {
+      return res.status(409).json({
+        error: `Cannot edit line items or tax rate — $${paidAmount.toFixed(2)} has already been paid on this invoice. Void the payment first if you need to amend.`,
+      });
+    }
+
+    const nextItems = req.body.items !== undefined
+      ? sanitizeLineItems(req.body.items)
+      : (Array.isArray(inv.items) ? inv.items : []);
+    if (req.body.items !== undefined && nextItems.length === 0) {
+      return res.status(400).json({ error: 'Invoice must have at least one line item' });
+    }
+    const nextTaxRate = req.body.taxRate !== undefined
+      ? normalizeTaxRate(req.body.taxRate)
+      : normalizeTaxRate(inv.taxRate);
+    const { subtotal, tax, total } = computeInvoiceTotals(nextItems, nextTaxRate);
+    patch.items = nextItems;
+    patch.taxRate = nextTaxRate;
+    patch.subtotal = subtotal;
+    patch.tax = tax;
+    patch.total = total;
+  }
 
   // Phase 1.3 — 'paid' is no longer a manually-settable status. Invoices
   // become paid by having payments recorded against them. For backward
@@ -813,13 +874,20 @@ app.patch('/api/admin/invoices/:id', auth, (req, res) => {
     patch.status = req.body.status;
   }
 
+  // Describe the edit in the audit log — the more specific, the better
+  // for after-the-fact review.
+  let description;
+  if (patch.status) {
+    description = `Invoice ${inv.invoiceNumber} → ${patch.status}`;
+  } else if (patch.items !== undefined) {
+    description = `Invoice ${inv.invoiceNumber} edited — ${patch.items.length} line ${patch.items.length === 1 ? 'item' : 'items'}, total $${Number(patch.total).toFixed(2)}`;
+  } else if (Object.keys(patch).length > 0) {
+    const fields = Object.keys(patch).join(', ');
+    description = `Invoice ${inv.invoiceNumber} edited (${fields})`;
+  }
+
   const updated = Object.keys(patch).length > 0
-    ? invoicesRepo.update(req.params.id, patch, {
-        actor,
-        description: patch.status
-          ? `Invoice ${inv.invoiceNumber} → ${patch.status}`
-          : undefined,
-      })
+    ? invoicesRepo.update(req.params.id, patch, { actor, description })
     : inv;
 
   res.json({

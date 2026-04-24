@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw, UserSquare } from 'lucide-react'
+import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw, UserSquare, Pencil } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
+import LineItemsEditor from '../components/LineItemsEditor'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
 // Status map keyed on the server's effectiveStatus. 'partial' is new in
@@ -205,7 +206,7 @@ function PaymentHistory({ invoice, onVoidPayment }) {
   )
 }
 
-function InvoiceRow({ inv, expanded, onToggle, onSend, onDelete, onOpenPaymentModal, onVoidPayment, cardRef, highlight }) {
+function InvoiceRow({ inv, expanded, onToggle, onSend, onEdit, onDelete, onOpenPaymentModal, onVoidPayment, cardRef, highlight }) {
   // Display everything from the server-enriched effectiveStatus, paidAmount
   // and balance — these are computed on read so partial/paid/overdue always
   // reflect the actual payment state.
@@ -287,7 +288,7 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onDelete, onOpenPaymentMo
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Subtotal</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.subtotal)}</td></tr>
-                <tr><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Tax (8.5%)</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.tax)}</td></tr>
+                <tr><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Tax ({(() => { const r = Number(inv.taxRate); if (!Number.isFinite(r) || r === 0) return '0'; return (r * 100).toFixed(2).replace(/\.?0+$/, '') })()}%)</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.tax)}</td></tr>
                 <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-2 text-right font-semibold">Total</td><td className="px-3 py-2 text-right font-display font-bold text-lg">{formatCurrency(inv.total)}</td></tr>
                 {inv.paidAmount > 0 && (
                   <>
@@ -305,6 +306,13 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onDelete, onOpenPaymentMo
           {inv.dueDate && <p className="text-xs text-gray-500">Due: {formatDate(inv.dueDate)}</p>}
 
           <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              onClick={() => onEdit(inv)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 text-charcoal-900 text-xs font-medium rounded-lg hover:bg-gray-50"
+              title="Edit line items, due date, customer info, and notes"
+            >
+              <Pencil size={12} />Edit
+            </button>
             {isDraft && (
               <button
                 onClick={() => onSend(inv)}
@@ -341,61 +349,232 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onDelete, onOpenPaymentMo
   )
 }
 
+// Shared form body used by both New Invoice and Edit Invoice modals.
+// Renders all the fields + LineItemsEditor; parent supplies form, setForm,
+// items, setItems, a submit handler, and the submit button label.
+function InvoiceFormFields({ form, setForm, items, setItems }) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Customer Name *</label>
+          <input
+            required
+            value={form.customerName}
+            onChange={e => setForm({ ...form, customerName: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Due Date</label>
+          <input
+            type="date"
+            value={form.dueDate}
+            onChange={e => setForm({ ...form, dueDate: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Customer Email</label>
+          <input
+            type="email"
+            value={form.customerEmail}
+            onChange={e => setForm({ ...form, customerEmail: e.target.value })}
+            placeholder="customer@example.com"
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+          />
+          <p className="text-[10px] text-gray-400 mt-0.5">Used when you Send or Resend the invoice by email.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Tax Rate</label>
+          <div className="relative">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.taxRate}
+              onChange={e => setForm({ ...form, taxRate: e.target.value })}
+              className="w-full pr-8 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">%</span>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-0.5">Default 8.5% — set to 0 for tax-exempt customers.</p>
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-700 mb-1">Customer Address</label>
+        <input
+          value={form.customerAddress}
+          onChange={e => setForm({ ...form, customerAddress: e.target.value })}
+          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+        />
+      </div>
+
+      <div className="pt-2 border-t border-gray-100">
+        <label className="block text-xs font-semibold text-gray-700 mb-2">Line Items *</label>
+        <LineItemsEditor
+          items={items}
+          onChange={setItems}
+          taxRate={Number(form.taxRate) / 100 || 0}
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium text-gray-700 mb-1">Notes</label>
+        <textarea
+          value={form.notes}
+          onChange={e => setForm({ ...form, notes: e.target.value })}
+          rows={2}
+          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none resize-none"
+        />
+      </div>
+    </>
+  )
+}
+
 function NewInvoiceModal({ onClose, onSave, prefill }) {
+  // Prefill can come from a job — pick up customer info and line items.
+  const prefillItems = Array.isArray(prefill?.lineItems) && prefill.lineItems.length > 0
+    ? prefill.lineItems.map(li => ({
+        description: li.description,
+        quantity: Number(li.quantity) || 1,
+        rate: Number(li.rate) || 0,
+        serviceId: li.serviceId || null,
+      }))
+    : [{ description: prefill?.serviceType || '', quantity: 1, rate: 0, serviceId: null }]
+
   const [form, setForm] = useState({
-    customerName: prefill?.customerName || '', customerEmail: prefill?.email || '', customerAddress: prefill?.address || '',
-    jobId: prefill?.id || '', dueDate: '', notes: '',
+    customerName: prefill?.customerName || '',
+    customerEmail: prefill?.email || '',
+    customerAddress: prefill?.address || '',
+    jobId: prefill?.id || '',
+    dueDate: '',
+    taxRate: '8.5',
+    notes: '',
   })
-  const [items, setItems] = useState([{ description: prefill?.serviceType || '', quantity: 1, rate: 0 }])
+  const [items, setItems] = useState(prefillItems)
   const [saving, setSaving] = useState(false)
 
-  const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }])
-  const removeItem = (i) => setItems(items.filter((_, j) => j !== i))
-  const updateItem = (i, field, value) => { const next = [...items]; next[i][field] = field === 'description' ? value : parseFloat(value) || 0; setItems(next) }
-
-  const subtotal = items.reduce((s, item) => s + item.quantity * item.rate, 0)
-  const tax = Math.round(subtotal * 0.085 * 100) / 100
-  const total = subtotal + tax
-
   const handleSubmit = async (e) => {
-    e.preventDefault(); setSaving(true)
-    await onSave({ ...form, items }); setSaving(false); onClose()
+    e.preventDefault()
+    setSaving(true)
+    await onSave({
+      ...form,
+      taxRate: Number(form.taxRate) / 100 || 0,
+      items,
+    })
+    setSaving(false)
+    onClose()
   }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b"><h3 className="font-display font-bold text-lg">New Invoice</h3><button onClick={onClose}><X size={20} /></button></div>
+        <div className="flex items-center justify-between p-5 border-b">
+          <h3 className="font-display font-bold text-lg">New Invoice</h3>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Customer Name *</label><input required value={form.customerName} onChange={e => setForm({...form, customerName: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Due Date</label><input type="date" value={form.dueDate} onChange={e => setForm({...form, dueDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-          </div>
-          <div><label className="block text-xs font-medium text-gray-700 mb-1">Customer Address</label><input value={form.customerAddress} onChange={e => setForm({...form, customerAddress: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+          <InvoiceFormFields form={form} setForm={setForm} items={items} setItems={setItems} />
+          <button
+            type="submit"
+            disabled={saving || items.every(i => !i.description)}
+            className="w-full btn-primary py-2.5 disabled:opacity-50"
+          >
+            {saving ? 'Creating…' : 'Create Invoice'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
 
+function EditInvoiceModal({ invoice, onClose, onSaved }) {
+  const storedTaxRate = Number(invoice.taxRate)
+  const initialTaxPct = Number.isFinite(storedTaxRate) && storedTaxRate > 0
+    ? (storedTaxRate * 100).toFixed(2).replace(/\.?0+$/, '') || '0'
+    : '8.5'
+
+  const [form, setForm] = useState({
+    customerName: invoice.customerName || '',
+    customerEmail: invoice.customerEmail || '',
+    customerAddress: invoice.customerAddress || '',
+    dueDate: invoice.dueDate || '',
+    taxRate: initialTaxPct,
+    notes: invoice.notes || '',
+  })
+  const [items, setItems] = useState(
+    Array.isArray(invoice.items)
+      ? invoice.items.map(li => ({
+          description: li.description,
+          quantity: Number(li.quantity) || 1,
+          rate: Number(li.rate) || 0,
+          serviceId: li.serviceId || null,
+        }))
+      : []
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const paidAmount = Number(invoice.paidAmount || 0)
+  const locked = paidAmount > 0.005
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSaving(true); setError('')
+    const payload = {
+      customerName: form.customerName,
+      customerEmail: form.customerEmail,
+      customerAddress: form.customerAddress,
+      dueDate: form.dueDate,
+      notes: form.notes,
+    }
+    // Only send items + taxRate if the invoice isn't payment-locked.
+    if (!locked) {
+      payload.items = items
+      payload.taxRate = Number(form.taxRate) / 100 || 0
+    }
+    const res = await adminFetch(`/api/admin/invoices/${invoice.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+    setSaving(false)
+    if (res?.success) {
+      onSaved?.(res.invoice)
+      onClose()
+    } else {
+      setError(res?.error || 'Save failed')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b">
           <div>
-            <div className="flex items-center justify-between mb-2"><label className="text-xs font-medium text-gray-700">Line Items</label><button type="button" onClick={addItem} className="text-xs text-forest-700 font-medium hover:underline">+ Add Item</button></div>
-            <div className="space-y-2">
-              {items.map((item, i) => (
-                <div key={i} className="flex gap-2 items-center">
-                  <input placeholder="Description" value={item.description} onChange={e => updateItem(i, 'description', e.target.value)} className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" />
-                  <input type="number" placeholder="Qty" value={item.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)} className="w-16 px-2 py-2 rounded-lg border border-gray-200 text-sm text-center focus:border-forest-500 outline-none" />
-                  <input type="number" step="0.01" placeholder="Rate" value={item.rate} onChange={e => updateItem(i, 'rate', e.target.value)} className="w-24 px-2 py-2 rounded-lg border border-gray-200 text-sm text-right focus:border-forest-500 outline-none" />
-                  <span className="w-20 text-sm text-right font-medium">{formatCurrency(item.quantity * item.rate)}</span>
-                  {items.length > 1 && <button type="button" onClick={() => removeItem(i)} className="text-red-400 hover:text-red-600"><X size={16} /></button>}
-                </div>
-              ))}
+            <h3 className="font-display font-bold text-lg">Edit Invoice</h3>
+            <p className="text-xs text-gray-500">{invoice.invoiceNumber} · {invoice.customerName}</p>
+          </div>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {locked && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
+              <strong>Line items locked.</strong> ${paidAmount.toFixed(2)} has already been paid on this invoice.
+              You can still edit the customer info, due date, and notes. To change line items or tax rate, void the payment first from the expanded invoice view.
             </div>
-          </div>
-
-          <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Tax (8.5%)</span><span>{formatCurrency(tax)}</span></div>
-            <div className="flex justify-between font-display font-bold text-lg border-t border-gray-200 pt-2 mt-2"><span>Total</span><span>{formatCurrency(total)}</span></div>
-          </div>
-
-          <div><label className="block text-xs font-medium text-gray-700 mb-1">Notes</label><textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} rows={2} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none resize-none" /></div>
-          <button type="submit" disabled={saving || items.every(i => !i.description)} className="w-full btn-primary py-2.5 disabled:opacity-50">{saving ? 'Creating...' : 'Create Invoice'}</button>
+          )}
+          <InvoiceFormFields form={form} setForm={setForm} items={items} setItems={setItems} />
+          {error && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{error}</p>}
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full btn-primary py-2.5 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save Changes'}
+          </button>
         </form>
       </div>
     </div>
@@ -405,6 +584,7 @@ function NewInvoiceModal({ onClose, onSave, prefill }) {
 export default function AdminInvoices() {
   const [invoices, setInvoices] = useState([])
   const [showNew, setShowNew] = useState(false)
+  const [editingInvoice, setEditingInvoice] = useState(null)
   const [paymentModalInvoice, setPaymentModalInvoice] = useState(null)
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -528,6 +708,7 @@ export default function AdminInvoices() {
               expanded={expandedId === inv.id}
               onToggle={() => setExpandedId(expandedId === inv.id ? null : inv.id)}
               onSend={sendInvoice}
+              onEdit={setEditingInvoice}
               onDelete={deleteInvoice}
               onOpenPaymentModal={openPaymentModal}
               onVoidPayment={voidPayment}
@@ -539,6 +720,13 @@ export default function AdminInvoices() {
       )}
 
       {showNew && <NewInvoiceModal onClose={() => { setShowNew(false); setPrefill(null) }} onSave={createInvoice} prefill={prefill} />}
+      {editingInvoice && (
+        <EditInvoiceModal
+          invoice={editingInvoice}
+          onClose={() => setEditingInvoice(null)}
+          onSaved={() => fetchInvoices()}
+        />
+      )}
       {paymentModalInvoice && (
         <RecordPaymentModal
           invoice={paymentModalInvoice}
