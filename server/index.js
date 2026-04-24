@@ -7,6 +7,7 @@ const { readJSON, writeJSON } = require('./data-dir');
 const { repo } = require('./repo');
 const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
 const customers = require('./customers');
+const services = require('./services');
 const backup = require('./backup');
 
 const app = express();
@@ -1114,6 +1115,64 @@ app.delete('/api/admin/customers/:customerId/locations/:locationId', auth, (req,
   const ok = customers.deleteLocation(req.params.locationId, { actor });
   if (!ok) return res.status(404).json({ error: 'Location not found' });
   res.json({ success: true });
+});
+
+// ===================
+// SERVICES CATALOG API
+// ===================
+// The list of offerings Jimmy can add to jobs and invoices as line items.
+// Stripe auto-sync (Commit 4) will hook into create/update/delete below.
+
+// GET /api/admin/services — full catalog, optionally including inactive.
+app.get('/api/admin/services', auth, (req, res) => {
+  const includeInactive = req.query.includeInactive === 'true';
+  res.json({ services: services.listServices({ includeInactive }) });
+});
+
+// POST /api/admin/services — add a service to the catalog.
+// Body: { name, description, defaultPrice, category, active }
+app.post('/api/admin/services', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const service = services.createService(req.body, { actor });
+    // TODO Commit 4: if Stripe is configured, provision a matching
+    // Product + Price and stamp stripeProductId/stripePriceId on the service.
+    res.json({ success: true, service });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PATCH /api/admin/services/:id — edit a service. Any change to name,
+// description, or defaultPrice re-flags the service for Stripe re-sync
+// (actual sync happens in Commit 4 when the Stripe SDK is wired up).
+app.patch('/api/admin/services/:id', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const updated = services.updateService(req.params.id, req.body, { actor });
+    if (!updated) return res.status(404).json({ error: 'Service not found' });
+    res.json({ success: true, service: updated });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/services/:id — remove a service from the catalog.
+// (Existing invoices/jobs that referenced this service keep their copies
+// of the description/rate; they're free-standing values, not foreign keys.)
+app.delete('/api/admin/services/:id', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const ok = services.deleteService(req.params.id, { actor });
+  if (!ok) return res.status(404).json({ error: 'Service not found' });
+  res.json({ success: true });
+});
+
+// POST /api/admin/services/seed — seed the catalog with a starter set of
+// common pest control services. No-op if the catalog already has entries.
+app.post('/api/admin/services/seed', auth, (req, res) => {
+  const actor = actorFromReq(req);
+  const result = services.seedStarterCatalog({ actor });
+  res.json({ success: true, ...result });
 });
 
 // ===================
