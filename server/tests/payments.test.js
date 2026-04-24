@@ -99,16 +99,18 @@ test('payment endpoints exist and reject invalid inputs', async () => {
 
 test('recording a full-balance payment marks invoice as paid', async () => {
   const inv = await makeInvoiceWithBalance(100);
-  const totalWithTax = inv.total; // 100 + 8.5% tax = 108.50
+  // Invoices are tax-exempt by default (pest control services in OK are
+  // exempt from sales tax) — so total equals subtotal.
+  const totalDue = inv.total; // 100 subtotal + $0 tax = 100
 
   const pay = await request(server, 'POST', `/api/admin/invoices/${inv.id}/payments`, {
     token,
-    body: { amount: totalWithTax, paymentMethod: 'cash', referenceNumber: 'CHK-001' },
+    body: { amount: totalDue, paymentMethod: 'cash', referenceNumber: 'CHK-001' },
   });
   assert.equal(pay.status, 200);
   assert.ok(pay.body.payment.id);
   assert.equal(pay.body.invoice.effectiveStatus, 'paid');
-  assert.equal(pay.body.invoice.paidAmount, totalWithTax);
+  assert.equal(pay.body.invoice.paidAmount, totalDue);
   assert.equal(pay.body.invoice.balance, 0);
   assert.equal(pay.body.invoice.payments.length, 1);
   assert.equal(pay.body.invoice.payments[0].referenceNumber, 'CHK-001');

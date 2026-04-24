@@ -582,18 +582,18 @@ app.get('/api/admin/invoices', auth, (req, res) => {
   res.json({ invoices: invoicesRepo.all().map(enrichInvoice) });
 });
 
-// Default tax rate for new invoices (Oklahoma sales tax ballpark).
-// Individual invoices can override this with a per-row taxRate field so
-// Jimmy can null it out for exempt customers or nudge it up for a
-// specific jurisdiction without changing the global.
-const DEFAULT_TAX_RATE = 0.085;
+// Default tax rate for new invoices. Frontline's pest-control services
+// are sales-tax-exempt in Oklahoma (services to real property), so the
+// default is 0. Individual invoices can still override this per-row if
+// a specific situation requires collecting tax (product sales, etc.).
+const DEFAULT_TAX_RATE = 0;
 
 function normalizeTaxRate(rate) {
   const n = Number(rate);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_TAX_RATE;
-  // Allow 0-1 as a fraction (0.085) or >=1 as a percentage (8.5) — if the
-  // UI accidentally sends 8.5 instead of 0.085, divide by 100 so totals
-  // don't blow up.
+  // Allow 0-1 as a fraction (0.085) or >=1 as a percentage (8.5) — if
+  // the UI accidentally sends 8.5 instead of 0.085, divide by 100 so
+  // totals don't blow up.
   return n > 1 ? n / 100 : n;
 }
 
@@ -1388,7 +1388,7 @@ app.get('/api/pay/:token', (req, res) => {
       })),
       subtotal: Number(inv.subtotal),
       tax: Number(inv.tax),
-      taxRate: Number(inv.taxRate || 0.085),
+      taxRate: Number(inv.taxRate != null ? inv.taxRate : 0),
       total: Number(inv.total),
       paidAmount,
       balance,

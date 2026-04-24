@@ -217,7 +217,7 @@ async function createCheckoutSessionForInvoice(invoice, { successUrl, cancelUrl 
   // matches the invoice they received to the penny.
   const taxAmount = Math.round(Number(invoice.tax || 0) * 100);
   if (taxAmount > 0) {
-    const taxPct = (Number(invoice.taxRate || 0.085) * 100).toFixed(2).replace(/\.?0+$/, '');
+    const taxPct = (Number(invoice.taxRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '');
     lineItems.push({
       price_data: {
         currency: 'usd',

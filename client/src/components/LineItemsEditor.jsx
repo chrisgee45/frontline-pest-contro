@@ -14,7 +14,7 @@ import { adminFetch, formatCurrency } from '../hooks/useAdmin'
 // Parent stores the full array in its own state. This component doesn't
 // manage persistence — callers send the array back to their API on save.
 
-export default function LineItemsEditor({ items, onChange, showTotals = true, taxRate = 0.085 }) {
+export default function LineItemsEditor({ items, onChange, showTotals = true, taxRate = 0 }) {
   const [catalog, setCatalog] = useState([])
   const [catalogLoaded, setCatalogLoaded] = useState(false)
 
@@ -90,17 +90,22 @@ export default function LineItemsEditor({ items, onChange, showTotals = true, ta
         </button>
       </div>
 
-      {/* Running totals */}
+      {/* Running totals — tax row only appears if the rate is non-zero
+          (Frontline's services are sales-tax-exempt in OK by default). */}
       {showTotals && items.length > 0 && (
         <div className="mt-3 pt-3 border-t border-gray-200 text-sm space-y-1">
-          <div className="flex justify-between text-gray-600">
-            <span>Subtotal</span>
-            <span className="font-medium">{formatCurrency(subtotal)}</span>
-          </div>
-          <div className="flex justify-between text-gray-600">
-            <span>Tax ({(taxRate * 100).toFixed(2)}%)</span>
-            <span className="font-medium">{formatCurrency(tax)}</span>
-          </div>
+          {tax > 0 && (
+            <div className="flex justify-between text-gray-600">
+              <span>Subtotal</span>
+              <span className="font-medium">{formatCurrency(subtotal)}</span>
+            </div>
+          )}
+          {tax > 0 && (
+            <div className="flex justify-between text-gray-600">
+              <span>Tax ({(taxRate * 100).toFixed(2)}%)</span>
+              <span className="font-medium">{formatCurrency(tax)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-charcoal-900 font-bold pt-1 border-t border-gray-100">
             <span>Total</span>
             <span>{formatCurrency(total)}</span>

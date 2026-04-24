@@ -231,15 +231,19 @@ export default function PublicPayPage({ mode = 'pay' }) {
             ))}
           </div>
           <div className="border-t border-gray-200 mt-2 pt-2 space-y-1 text-sm">
-            <div className="flex justify-between text-gray-600">
-              <span>Subtotal</span>
-              <span>{formatCurrency(data.subtotal)}</span>
-            </div>
+            {/* Only show the Subtotal + Tax rows when tax > 0; tax-exempt
+                invoices go straight to Total so the summary stays clean. */}
             {data.tax > 0 && (
-              <div className="flex justify-between text-gray-600">
-                <span>Tax ({((data.taxRate || 0.085) * 100).toFixed(2).replace(/\.?0+$/, '')}%)</span>
-                <span>{formatCurrency(data.tax)}</span>
-              </div>
+              <>
+                <div className="flex justify-between text-gray-600">
+                  <span>Subtotal</span>
+                  <span>{formatCurrency(data.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-gray-600">
+                  <span>Tax ({((data.taxRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '')}%)</span>
+                  <span>{formatCurrency(data.tax)}</span>
+                </div>
+              </>
             )}
             <div className="flex justify-between font-bold text-charcoal-900 pt-1 border-t border-gray-200">
               <span>Total</span>

@@ -185,8 +185,10 @@ async function sendInvoiceEmail(invoice, { to, payUrl } = {}) {
         </table>
 
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
-          <tr><td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #737373;">Subtotal</td><td style="padding: 4px 12px; text-align: right; font-size: 13px; width: 100px;">${fmt(invoice.subtotal)}</td></tr>
-          <tr><td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #737373;">Tax (${((Number(invoice.taxRate) || 0.085) * 100).toFixed(2).replace(/\.?0+$/, '')}%)</td><td style="padding: 4px 12px; text-align: right; font-size: 13px;">${fmt(invoice.tax)}</td></tr>
+          ${Number(invoice.tax) > 0.005 ? `
+            <tr><td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #737373;">Subtotal</td><td style="padding: 4px 12px; text-align: right; font-size: 13px; width: 100px;">${fmt(invoice.subtotal)}</td></tr>
+            <tr><td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #737373;">Tax (${((Number(invoice.taxRate) || 0) * 100).toFixed(2).replace(/\.?0+$/, '')}%)</td><td style="padding: 4px 12px; text-align: right; font-size: 13px;">${fmt(invoice.tax)}</td></tr>
+          ` : ''}
           <tr style="border-top: 2px solid #e5e5e5;"><td style="padding: 10px 12px; text-align: right; font-weight: 700; font-size: 15px;">Total</td><td style="padding: 10px 12px; text-align: right; font-weight: 700; font-size: 18px;">${fmt(invoice.total)}</td></tr>
           ${hasPartial ? `
             <tr><td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #16a34a;">Payments Received</td><td style="padding: 4px 12px; text-align: right; font-size: 13px; color: #16a34a;">-${fmt(paidAmount)}</td></tr>

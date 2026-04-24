@@ -287,8 +287,15 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onEdit, onDelete, onOpenP
                 ))}
               </tbody>
               <tfoot>
-                <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Subtotal</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.subtotal)}</td></tr>
-                <tr><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Tax ({(() => { const r = Number(inv.taxRate); if (!Number.isFinite(r) || r === 0) return '0'; return (r * 100).toFixed(2).replace(/\.?0+$/, '') })()}%)</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.tax)}</td></tr>
+                {/* Only show a separate Subtotal/Tax row pair if the
+                    invoice actually has tax. Tax-exempt invoices skip
+                    straight to Total to keep the summary uncluttered. */}
+                {Number(inv.tax) > 0.005 && (
+                  <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Subtotal</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.subtotal)}</td></tr>
+                )}
+                {Number(inv.tax) > 0.005 && (
+                  <tr><td colSpan="3" className="px-3 py-1.5 text-right text-xs text-gray-500">Tax ({(() => { const r = Number(inv.taxRate); if (!Number.isFinite(r) || r === 0) return '0'; return (r * 100).toFixed(2).replace(/\.?0+$/, '') })()}%)</td><td className="px-3 py-1.5 text-right text-sm">{formatCurrency(inv.tax)}</td></tr>
+                )}
                 <tr className="border-t border-gray-200"><td colSpan="3" className="px-3 py-2 text-right font-semibold">Total</td><td className="px-3 py-2 text-right font-display font-bold text-lg">{formatCurrency(inv.total)}</td></tr>
                 {inv.paidAmount > 0 && (
                   <>
@@ -427,7 +434,7 @@ function InvoiceFormFields({ form, setForm, items, setItems }) {
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">%</span>
           </div>
-          <p className="text-[10px] text-gray-400 mt-0.5">Default 8.5% — set to 0 for tax-exempt customers.</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">Default 0% — Frontline's pest-control services are sales-tax-exempt in Oklahoma. Set a rate only for taxable items (product sales, etc.).</p>
         </div>
       </div>
       <div>
@@ -478,7 +485,7 @@ function NewInvoiceModal({ onClose, onSave, prefill }) {
     customerAddress: prefill?.address || '',
     jobId: prefill?.id || '',
     dueDate: '',
-    taxRate: '8.5',
+    taxRate: '0',
     notes: '',
   })
   const [items, setItems] = useState(prefillItems)
@@ -522,7 +529,7 @@ function EditInvoiceModal({ invoice, onClose, onSaved }) {
   const storedTaxRate = Number(invoice.taxRate)
   const initialTaxPct = Number.isFinite(storedTaxRate) && storedTaxRate > 0
     ? (storedTaxRate * 100).toFixed(2).replace(/\.?0+$/, '') || '0'
-    : '8.5'
+    : '0'
 
   const [form, setForm] = useState({
     customerName: invoice.customerName || '',
