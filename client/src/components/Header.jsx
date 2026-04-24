@@ -21,12 +21,18 @@ export default function Header() {
       {/* Top bar */}
       <div className="bg-forest-700 text-white text-sm py-1.5">
         <div className="container-max flex justify-between items-center px-4 sm:px-6 lg:px-8">
-          <span className="hidden sm:inline">Serving All of Oklahoma — Same-Day Service Available</span>
-          <span className="sm:hidden text-center w-full">Same-Day Service Available</span>
-          <a href="tel:4055311034" className="hidden sm:flex items-center gap-1.5 font-semibold hover:text-amber-300 transition-colors">
-            <Phone size={14} />
-            (405) 531-1034
-          </a>
+          <span className="hidden md:inline">Serving All of Oklahoma — Same-Day Service Available</span>
+          <span className="md:hidden text-center w-full sm:text-left sm:w-auto">Same-Day Service</span>
+          <div className="hidden sm:flex items-center gap-3 font-semibold">
+            <a href="tel:4055311034" className="flex items-center gap-1.5 hover:text-amber-300 transition-colors">
+              <Phone size={14} />
+              Jimmy (405) 531-1034
+            </a>
+            <span className="text-white/40">·</span>
+            <a href="tel:3488688231" className="flex items-center gap-1.5 hover:text-amber-300 transition-colors">
+              Jarret 348-868-8231
+            </a>
+          </div>
         </div>
       </div>
 
@@ -57,12 +63,19 @@ export default function Header() {
             ))}
           </nav>
 
-          {/* Desktop CTA */}
-          <div className="hidden lg:flex items-center gap-3">
-            <a href="tel:4055311034" className="flex items-center gap-2 text-white font-semibold hover:text-amber-400 transition-colors">
-              <Phone size={18} />
-              (405) 531-1034
-            </a>
+          {/* Desktop CTA — two stacked phone links so Jimmy and Jarret
+              both fit without pushing the Free Quote button off-row. */}
+          <div className="hidden lg:flex items-center gap-4">
+            <div className="flex flex-col items-end leading-tight">
+              <a href="tel:4055311034" className="flex items-center gap-1.5 text-white text-sm font-semibold hover:text-amber-400 transition-colors">
+                <Phone size={14} />
+                Jimmy — 405-531-1034
+              </a>
+              <a href="tel:3488688231" className="flex items-center gap-1.5 text-white text-sm font-semibold hover:text-amber-400 transition-colors mt-0.5">
+                <Phone size={14} />
+                Jarret — 348-868-8231
+              </a>
+            </div>
             <Link to="/contact" className="btn-primary text-sm py-2.5 px-5">
               Free Quote
             </Link>
@@ -97,7 +110,11 @@ export default function Header() {
             ))}
             <a href="tel:4055311034" className="mt-2 btn-primary justify-center">
               <Phone size={18} />
-              Call (405) 531-1034
+              Call Jimmy — 405-531-1034
+            </a>
+            <a href="tel:3488688231" className="btn-primary justify-center">
+              <Phone size={18} />
+              Call Jarret — 348-868-8231
             </a>
           </nav>
         </div>

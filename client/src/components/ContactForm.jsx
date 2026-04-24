@@ -57,7 +57,16 @@ export default function ContactForm() {
                   <Phone className="text-forest-700 group-hover:text-white transition-colors" size={22} />
                 </div>
                 <div>
-                  <div className="font-semibold text-charcoal-900">(405) 531-1034</div>
+                  <div className="font-semibold text-charcoal-900">Call Jimmy — (405) 531-1034</div>
+                  <div className="text-sm text-gray-500">Call us directly</div>
+                </div>
+              </a>
+              <a href="tel:3488688231" className="flex items-center gap-4 group">
+                <div className="w-12 h-12 rounded-lg bg-forest-50 group-hover:bg-forest-700 flex items-center justify-center transition-colors">
+                  <Phone className="text-forest-700 group-hover:text-white transition-colors" size={22} />
+                </div>
+                <div>
+                  <div className="font-semibold text-charcoal-900">Call Jarret — 348-868-8231</div>
                   <div className="text-sm text-gray-500">Call us directly</div>
                 </div>
               </a>

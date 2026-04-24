@@ -32,13 +32,20 @@ export default function Hero() {
             Protecting Oklahoma homes and businesses from termites, rodents, and pests with expert treatment backed by our satisfaction guarantee. Owned and operated by Jimmy Manharth.
           </p>
 
-          {/* CTAs */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-10">
-            <a href="tel:4055311034" className="btn-cta">
-              <Phone size={22} />
-              Call Now — (405) 531-1034
-            </a>
-            <a href="#contact" className="btn-secondary text-lg py-4 px-8">
+          {/* CTAs — two call buttons side-by-side, then Get a Free Quote
+              centered on its own row beneath them. */}
+          <div className="flex flex-col items-start gap-4 mb-10">
+            <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
+              <a href="tel:4055311034" className="btn-cta">
+                <Phone size={22} />
+                Call Jimmy 405-531-1034
+              </a>
+              <a href="tel:3488688231" className="btn-cta">
+                <Phone size={22} />
+                Call Jarret 348-868-8231
+              </a>
+            </div>
+            <a href="#contact" className="btn-secondary text-lg py-4 px-8 self-stretch sm:self-auto justify-center">
               <FileText size={20} />
               Get a Free Quote
             </a>

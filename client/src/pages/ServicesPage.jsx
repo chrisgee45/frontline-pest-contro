@@ -171,11 +171,19 @@ export default function ServicesPage() {
           <p className="text-forest-100/80 text-lg mb-8 max-w-2xl mx-auto">
             No problem. Give us a call or request a free inspection and we'll identify the issue and recommend the right treatment plan.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <a href="tel:4055311034" className="btn-cta">
-              <Phone size={20} />
-              Call (405) 531-1034
-            </a>
+          {/* Two call buttons side-by-side, then Request Free Inspection
+              centered on its own row beneath them. */}
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <a href="tel:4055311034" className="btn-cta">
+                <Phone size={20} />
+                Call Jimmy 405-531-1034
+              </a>
+              <a href="tel:3488688231" className="btn-cta">
+                <Phone size={20} />
+                Call Jarret 348-868-8231
+              </a>
+            </div>
             <Link to="/contact" className="btn-secondary text-lg py-4 px-8">
               Request Free Inspection
             </Link>
