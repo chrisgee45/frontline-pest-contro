@@ -55,6 +55,12 @@ export default function Footer() {
                 </a>
               </li>
               <li>
+                <a href="tel:3468688231" className="flex items-center gap-2 hover:text-white transition-colors">
+                  <Phone size={16} className="text-forest-500" />
+                  (346) 868-8231
+                </a>
+              </li>
+              <li>
                 <span className="flex items-center gap-2">
                   <MapPin size={16} className="text-forest-500" />
                   Edmond, Oklahoma
