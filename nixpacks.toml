@@ -1,5 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs_18"]
+# Node 18 reached end-of-life in April 2025 and Nixpacks has dropped it
+# from its nixpkgs snapshot. Bumping to the current active LTS (20).
+# Our engines field in package.json says ">=18" so 20 is a valid upgrade.
+nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = ["npm install", "cd client && npm install"]
