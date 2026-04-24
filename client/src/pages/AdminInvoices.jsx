@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw, UserSquare, Pencil } from 'lucide-react'
+import { Plus, X, ChevronDown, ChevronUp, Trash2, Send, DollarSign, Briefcase, CircleDollarSign, Ban, Calendar, Mail, RefreshCw, UserSquare, Pencil, Link2, Copy, CheckCircle2 } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import LineItemsEditor from '../components/LineItemsEditor'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
@@ -206,7 +206,7 @@ function PaymentHistory({ invoice, onVoidPayment }) {
   )
 }
 
-function InvoiceRow({ inv, expanded, onToggle, onSend, onEdit, onDelete, onOpenPaymentModal, onVoidPayment, cardRef, highlight }) {
+function InvoiceRow({ inv, expanded, onToggle, onSend, onEdit, onDelete, onOpenPaymentModal, onVoidPayment, onCopyPayLink, onSendPayLink, payLinkCopied, stripeEnabled, cardRef, highlight }) {
   // Display everything from the server-enriched effectiveStatus, paidAmount
   // and balance — these are computed on read so partial/paid/overdue always
   // reflect the actual payment state.
@@ -318,7 +318,7 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onEdit, onDelete, onOpenP
                 onClick={() => onSend(inv)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700"
                 title={hasEmail
-                  ? `Email this invoice to ${inv.customerEmail} and mark it Sent`
+                  ? `Email this invoice to ${inv.customerEmail} and mark it Sent${stripeEnabled ? ' (includes online pay link)' : ''}`
                   : 'No customer email on file — will just mark as Sent'}
               >
                 {hasEmail ? <Mail size={12} /> : <Send size={12} />}
@@ -329,10 +329,37 @@ function InvoiceRow({ inv, expanded, onToggle, onSend, onEdit, onDelete, onOpenP
               <button
                 onClick={() => onSend(inv)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100"
-                title={`Resend this invoice to ${inv.customerEmail}`}
+                title={`Resend this invoice to ${inv.customerEmail}${stripeEnabled ? ' (includes online pay link)' : ''}`}
               >
                 <RefreshCw size={12} />Resend
               </button>
+            )}
+            {/* Pay link actions — only show when Stripe is configured AND
+                there's a balance to collect. Copy URL for Jimmy to text
+                manually, or Send triggers the branded pay-link email. */}
+            {stripeEnabled && canRecordPayment && (
+              <>
+                <button
+                  onClick={() => onCopyPayLink(inv)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg ${
+                    payLinkCopied
+                      ? 'bg-green-100 text-green-800 border border-green-200'
+                      : 'bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100'
+                  }`}
+                  title="Generate a pay link and copy the URL to your clipboard"
+                >
+                  {payLinkCopied ? <><CheckCircle2 size={12} />Copied</> : <><Copy size={12} />Copy Pay Link</>}
+                </button>
+                {hasEmail && (
+                  <button
+                    onClick={() => onSendPayLink(inv)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700"
+                    title={`Email a pay link to ${inv.customerEmail}`}
+                  >
+                    <Link2 size={12} />Send Pay Link
+                  </button>
+                )}
+              </>
             )}
             {canRecordPayment && (
               <button onClick={() => onOpenPaymentModal(inv)} className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700">
@@ -586,6 +613,8 @@ export default function AdminInvoices() {
   const [showNew, setShowNew] = useState(false)
   const [editingInvoice, setEditingInvoice] = useState(null)
   const [paymentModalInvoice, setPaymentModalInvoice] = useState(null)
+  const [stripeEnabled, setStripeEnabled] = useState(false)
+  const [payLinkCopiedId, setPayLinkCopiedId] = useState(null)
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [prefill, setPrefill] = useState(null)
@@ -599,8 +628,12 @@ export default function AdminInvoices() {
 
   const fetchInvoices = useCallback(async () => {
     if (!getToken()) { navigate('/admin'); return }
-    const data = await adminFetch('/api/admin/invoices')
+    const [data, stripeStatus] = await Promise.all([
+      adminFetch('/api/admin/invoices'),
+      adminFetch('/api/admin/stripe/status'),
+    ])
     if (data) setInvoices(data.invoices || [])
+    if (stripeStatus) setStripeEnabled(!!stripeStatus.configured)
     setLoading(false)
   }, [navigate])
 
@@ -674,6 +707,53 @@ export default function AdminInvoices() {
   const voidPayment = async (paymentId) => { await adminFetch(`/api/admin/payments/${paymentId}`, { method: 'DELETE' }); fetchInvoices() }
   const openPaymentModal = (inv) => setPaymentModalInvoice(inv)
 
+  // Generate a pay link for this invoice and copy the URL to clipboard
+  // so Jimmy can text/DM it to a customer manually.
+  const copyPayLink = async (inv) => {
+    const res = await adminFetch(`/api/admin/invoices/${inv.id}/pay-link`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    if (!res?.success) {
+      alert(`Couldn't create pay link: ${res?.error || 'unknown error'}`)
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(res.publicUrl)
+      setPayLinkCopiedId(inv.id)
+      setTimeout(() => setPayLinkCopiedId(null), 2500)
+    } catch {
+      // Clipboard API can fail in some browsers — fall back to a prompt
+      // so the link is never irretrievable.
+      prompt('Copy this pay link:', res.publicUrl)
+    }
+  }
+
+  // Email a pay link to the invoice's customerEmail with a branded
+  // payment-reminder template (bigger Pay Now button, shorter body
+  // than the full invoice email).
+  const sendPayLink = async (inv) => {
+    if (!inv.customerEmail) {
+      alert('This invoice has no customer email. Use Edit to add one, or use Copy Pay Link and send it yourself.')
+      return
+    }
+    if (!confirm(`Email a pay link for ${inv.invoiceNumber} to ${inv.customerEmail}?`)) return
+    const res = await adminFetch(`/api/admin/invoices/${inv.id}/send-pay-link`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    if (res?.success) {
+      if (res.sent) {
+        alert(`Pay link emailed to ${res.recipient}.`)
+      } else {
+        alert(`Pay link prepared, but email wasn't sent: ${res.reason}`)
+      }
+    } else {
+      alert(`Failed to send pay link: ${res?.error || 'unknown error'}`)
+    }
+    fetchInvoices()
+  }
+
   const filtered = filter === 'all' ? invoices : invoices.filter(i => (i.effectiveStatus || i.status) === filter)
   const totalOutstanding = invoices
     .filter(i => i.effectiveStatus !== 'draft' && i.effectiveStatus !== 'paid')
@@ -712,6 +792,10 @@ export default function AdminInvoices() {
               onDelete={deleteInvoice}
               onOpenPaymentModal={openPaymentModal}
               onVoidPayment={voidPayment}
+              onCopyPayLink={copyPayLink}
+              onSendPayLink={sendPayLink}
+              payLinkCopied={payLinkCopiedId === inv.id}
+              stripeEnabled={stripeEnabled}
               cardRef={inv.id === focusId ? focusedRef : undefined}
               highlight={inv.id === highlightedId}
             />

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Kanban, FileText, Calculator, Users, UserSquare, LogOut, Menu, X, ChevronRight, DollarSign, Receipt, TrendingUp, ClipboardList, BookOpen, Shield, Settings, Package } from 'lucide-react'
+import { LayoutDashboard, Kanban, FileText, Calculator, Users, UserSquare, LogOut, Menu, X, ChevronRight, DollarSign, Receipt, TrendingUp, ClipboardList, BookOpen, Shield, Settings, Package, Link2 } from 'lucide-react'
 import { LogoIcon } from './Logo'
 
 const navItems = [
@@ -10,6 +10,7 @@ const navItems = [
   { label: 'Jobs', to: '/admin/jobs', icon: Kanban },
   { label: 'Services', to: '/admin/services', icon: Package },
   { label: 'Invoices', to: '/admin/invoices', icon: FileText },
+  { label: 'Pay Links', to: '/admin/pay-links', icon: Link2 },
   { label: 'Accounting', to: '/admin/accounting', icon: Calculator },
   { section: 'Financials' },
   { label: 'Financials', to: '/admin/financials', icon: TrendingUp },

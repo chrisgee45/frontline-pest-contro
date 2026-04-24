@@ -14,6 +14,8 @@ import AdminCustomerDetail from './pages/AdminCustomerDetail'
 import AdminJobs from './pages/AdminJobs'
 import AdminServices from './pages/AdminServices'
 import AdminInvoices from './pages/AdminInvoices'
+import AdminPayLinks from './pages/AdminPayLinks'
+import PublicPayPage from './pages/PublicPayPage'
 import AdminAccounting from './pages/AdminAccounting'
 import AdminFinancials from './pages/AdminFinancials'
 import AdminExpenses from './pages/AdminExpenses'
@@ -39,6 +41,12 @@ function App() {
           <Route path="/admin/jobs" element={<AdminJobs />} />
           <Route path="/admin/services" element={<AdminServices />} />
           <Route path="/admin/invoices" element={<AdminInvoices />} />
+          <Route path="/admin/pay-links" element={<AdminPayLinks />} />
+
+          {/* Public customer-facing pay page — no admin auth. Reached
+              from invoice emails and texted/copied pay links. */}
+          <Route path="/pay/:token" element={<PublicPayPage mode="pay" />} />
+          <Route path="/pay/:token/success" element={<PublicPayPage mode="success" />} />
           <Route path="/admin/accounting" element={<AdminAccounting />} />
           <Route path="/admin/financials" element={<AdminFinancials />} />
           <Route path="/admin/expenses" element={<AdminExpenses />} />

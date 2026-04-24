@@ -9,12 +9,124 @@ const { recordAudit, queryAudit, listDistinct } = require('./audit-helpers');
 const customers = require('./customers');
 const services = require('./services');
 const stripeLib = require('./stripe');
+const payLinks = require('./pay-links');
 const backup = require('./backup');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
+
+// ============================================================
+// Stripe webhook — MUST be registered BEFORE express.json() because
+// Stripe webhook signature verification requires the raw request body.
+// Any other body parsing on this route (like JSON) would mutate the
+// payload and break the HMAC check.
+// ============================================================
+app.post(
+  '/api/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    if (!signature) return res.status(400).send('Missing Stripe-Signature header');
+
+    let event;
+    try {
+      event = stripeLib.verifyWebhookSignature(req.body, signature);
+    } catch (err) {
+      console.error('[stripe webhook] signature verification failed:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Idempotency — Stripe may retry the same event. Dedupe by event ID
+    // so we don't double-record payments. Keep the last 1000 IDs in a
+    // tiny JSON file so the check survives restarts.
+    const processed = readJSON('_processed_stripe_events', []);
+    if (processed.includes(event.id)) {
+      console.log(`[stripe webhook] duplicate event ${event.id} — ignoring`);
+      return res.json({ received: true, duplicate: true });
+    }
+
+    try {
+      // checkout.session.completed fires after a successful payment.
+      // Use this to auto-record payments against invoices and flip
+      // pay-link status to 'paid'. We don't need to wait for
+      // payment_intent.succeeded separately because Checkout sessions
+      // guarantee payment_status is set before firing this event.
+      if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        const md = session.metadata || {};
+        const kind = md.frontline_kind;
+        const amount = Number(session.amount_total || 0) / 100;
+        const paymentIntentId = session.payment_intent;
+
+        if (kind === 'invoice' && md.frontline_invoice_id) {
+          const inv = invoicesRepo.find(md.frontline_invoice_id);
+          if (inv) {
+            try {
+              recordPayment(
+                inv,
+                {
+                  amount,
+                  paymentMethod: 'card',
+                  paymentDate: new Date().toISOString().slice(0, 10),
+                  referenceNumber: paymentIntentId || session.id,
+                  notes: `Stripe Checkout — ${session.customer_details?.email || session.customer_email || 'online payment'}`,
+                },
+                'stripe-webhook'
+              );
+              // Clear the stored session so regenerating a new pay link
+              // (e.g. for a refund later) doesn't point at the consumed one.
+              invoicesRepo.update(
+                inv.id,
+                {
+                  stripeSessionId: null,
+                  stripeSessionUrl: null,
+                  stripeSessionExpiresAt: null,
+                  stripePaidSessionId: session.id,
+                  stripePaidAt: new Date().toISOString(),
+                },
+                { actor: 'stripe-webhook', description: `Stripe pay link for ${inv.invoiceNumber} paid ($${amount.toFixed(2)})` }
+              );
+              console.log(`[stripe webhook] recorded $${amount.toFixed(2)} payment for invoice ${inv.invoiceNumber}`);
+            } catch (err) {
+              console.error('[stripe webhook] recordPayment failed:', err.message);
+            }
+          } else {
+            console.warn(`[stripe webhook] invoice ${md.frontline_invoice_id} not found`);
+          }
+        } else if (kind === 'standalone' && md.frontline_pay_link_id) {
+          const pl = payLinks.getPayLink(md.frontline_pay_link_id);
+          if (pl) {
+            payLinks.updatePayLink(
+              pl.id,
+              {
+                status: 'paid',
+                paidAt: new Date().toISOString(),
+                stripePaymentIntentId: paymentIntentId || null,
+              },
+              { actor: 'stripe-webhook', description: `Pay link paid: $${amount.toFixed(2)} via Stripe` }
+            );
+            console.log(`[stripe webhook] pay link ${pl.id.slice(0, 8)} marked paid ($${amount.toFixed(2)})`);
+          } else {
+            console.warn(`[stripe webhook] pay link ${md.frontline_pay_link_id} not found`);
+          }
+        }
+      }
+
+      // Mark as processed and trim to last 1000 to bound storage.
+      processed.push(event.id);
+      if (processed.length > 1000) processed.splice(0, processed.length - 1000);
+      writeJSON('_processed_stripe_events', processed);
+
+      res.json({ received: true });
+    } catch (err) {
+      console.error('[stripe webhook] handler error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 app.use(express.json());
 
 // --- Collections routed through the audited repo layer ---
@@ -931,12 +1043,53 @@ app.post('/api/admin/invoices/:id/send', auth, async (req, res) => {
     return res.json({ success: true, invoice: enrichInvoice(updated), emailed: false, reason: 'no customer email' });
   }
 
+  // If Stripe is configured, ensure we have a pay link ready to include
+  // in the email. Either reuse the existing session (if still valid) or
+  // create a new one. This happens inline before sending so the
+  // customer's email has a working Pay Online button on first receipt.
+  let payUrl = null;
+  if (stripeLib.isConfigured()) {
+    try {
+      const { balance } = getInvoiceTotals(invoice);
+      if (balance > 0.005) {
+        let token = invoice.payToken;
+        const patch = {};
+        if (!token) { token = crypto.randomUUID(); patch.payToken = token; }
+
+        const APP_URL = stripeLib.APP_URL;
+        const successUrl = `${APP_URL}/pay/${token}/success?session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${APP_URL}/pay/${token}`;
+
+        const stillValid = invoice.stripeSessionId &&
+          invoice.stripeSessionUrl &&
+          invoice.stripeSessionExpiresAt &&
+          new Date(invoice.stripeSessionExpiresAt).getTime() - Date.now() > 5 * 60 * 1000;
+
+        if (!stillValid) {
+          const sess = await stripeLib.createCheckoutSessionForInvoice(invoice, { successUrl, cancelUrl });
+          patch.stripeSessionId = sess.sessionId;
+          patch.stripeSessionUrl = sess.url;
+          patch.stripeSessionExpiresAt = sess.expiresAt;
+        }
+        if (Object.keys(patch).length > 0) {
+          invoicesRepo.update(invoice.id, patch, { actor, description: `Pay link prepared for ${invoice.invoiceNumber} email` });
+          // Refresh the in-memory copy for the email template.
+          Object.assign(invoice, patch);
+        }
+        payUrl = `${APP_URL}/pay/${token}`;
+      }
+    } catch (err) {
+      console.error('[stripe] Failed to prepare pay link for invoice email:', err.message);
+      // Fall through and send the email without a pay link.
+    }
+  }
+
   // Send the email. Enrich the invoice first so the template has the
   // computed balance/paidAmount/effectiveStatus fields.
   let emailResult;
   try {
     const { sendInvoiceEmail } = require('./email');
-    emailResult = await sendInvoiceEmail(enrichInvoice(invoice), { to: recipient });
+    emailResult = await sendInvoiceEmail(enrichInvoice(invoice), { to: recipient, payUrl });
   } catch (e) {
     console.error('sendInvoiceEmail threw:', e);
     emailResult = { sent: false, reason: e.message };
@@ -978,6 +1131,362 @@ app.delete('/api/admin/invoices/:id', auth, (req, res) => {
   const ok = invoicesRepo.delete(req.params.id, { actor: actorFromReq(req) });
   if (!ok) return res.status(404).json({ error: 'Invoice not found' });
   res.json({ success: true });
+});
+
+// ============================================================
+// PAY LINKS — invoice-tied
+// ============================================================
+
+// POST /api/admin/invoices/:id/pay-link
+//
+// Generate (or refresh) a Stripe Checkout Session for this invoice and
+// return the public pay URL. Idempotent-ish: if a session already
+// exists and hasn't expired, reuse it. If it expired (24h Stripe TTL)
+// or doesn't exist, create a fresh one.
+//
+// The returned `url` is the customer-facing pay URL on OUR domain
+// (e.g. https://www.frontlinepestok.com/pay/<token>), which hosts a
+// branded summary page before redirecting to Stripe Checkout. That
+// way Jimmy can text/email the customer a link that looks like his
+// business, not a raw Stripe URL.
+app.post('/api/admin/invoices/:id/pay-link', auth, async (req, res) => {
+  if (!stripeLib.isConfigured()) {
+    return res.status(400).json({ error: 'Stripe is not configured' });
+  }
+  const inv = invoicesRepo.find(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+
+  const { balance } = getInvoiceTotals(inv);
+  if (balance <= 0.005) {
+    return res.status(400).json({ error: 'Invoice is already paid in full' });
+  }
+
+  const actor = actorFromReq(req);
+  let token = inv.payToken;
+  const patch = {};
+
+  if (!token) {
+    token = crypto.randomUUID();
+    patch.payToken = token;
+  }
+
+  // Build the return URLs on our domain so the customer lands on a
+  // branded success page, not Stripe's default one.
+  const APP_URL = stripeLib.APP_URL;
+  const successUrl = `${APP_URL}/pay/${token}/success?session_id={CHECKOUT_SESSION_ID}`;
+  const cancelUrl = `${APP_URL}/pay/${token}`;
+
+  // Skip creating a new session if we have one that's still valid for
+  // at least the next 5 minutes AND the balance hasn't changed since
+  // it was created (both of which are rare but handled correctly).
+  const stillValid = inv.stripeSessionId &&
+    inv.stripeSessionUrl &&
+    inv.stripeSessionExpiresAt &&
+    new Date(inv.stripeSessionExpiresAt).getTime() - Date.now() > 5 * 60 * 1000;
+
+  let sessionInfo;
+  if (stillValid && !req.body?.force) {
+    sessionInfo = {
+      sessionId: inv.stripeSessionId,
+      url: inv.stripeSessionUrl,
+      expiresAt: inv.stripeSessionExpiresAt,
+    };
+  } else {
+    try {
+      sessionInfo = await stripeLib.createCheckoutSessionForInvoice(inv, { successUrl, cancelUrl });
+    } catch (err) {
+      console.error('[stripe] createCheckoutSessionForInvoice failed:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+    patch.stripeSessionId = sessionInfo.sessionId;
+    patch.stripeSessionUrl = sessionInfo.url;
+    patch.stripeSessionExpiresAt = sessionInfo.expiresAt;
+  }
+
+  if (Object.keys(patch).length > 0) {
+    invoicesRepo.update(inv.id, patch, {
+      actor,
+      description: `Pay link created/refreshed for ${inv.invoiceNumber}`,
+    });
+  }
+
+  res.json({
+    success: true,
+    token,
+    publicUrl: `${APP_URL}/pay/${token}`,
+    stripeCheckoutUrl: sessionInfo.url,
+    expiresAt: sessionInfo.expiresAt,
+  });
+});
+
+// POST /api/admin/invoices/:id/send-pay-link
+//
+// Generate a pay link (if needed) and email it to the customer in a
+// branded payment-reminder email. Uses the same transporter as the
+// normal invoice email. Returns { sent, publicUrl, recipient } so the
+// UI can show a summary toast.
+app.post('/api/admin/invoices/:id/send-pay-link', auth, async (req, res) => {
+  if (!stripeLib.isConfigured()) {
+    return res.status(400).json({ error: 'Stripe is not configured' });
+  }
+  const inv = invoicesRepo.find(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+  const recipient = (inv.customerEmail || '').trim();
+  if (!recipient) {
+    return res.status(400).json({ error: 'Invoice has no customer email. Add one first, or use Copy Pay Link and send manually.' });
+  }
+
+  const { balance } = getInvoiceTotals(inv);
+  if (balance <= 0.005) return res.status(400).json({ error: 'Invoice is already paid in full' });
+
+  // Ensure we have a current pay token + session.
+  const actor = actorFromReq(req);
+  let token = inv.payToken;
+  const patch = {};
+  if (!token) {
+    token = crypto.randomUUID();
+    patch.payToken = token;
+  }
+
+  const APP_URL = stripeLib.APP_URL;
+  const successUrl = `${APP_URL}/pay/${token}/success?session_id={CHECKOUT_SESSION_ID}`;
+  const cancelUrl = `${APP_URL}/pay/${token}`;
+
+  const stillValid = inv.stripeSessionId &&
+    inv.stripeSessionUrl &&
+    inv.stripeSessionExpiresAt &&
+    new Date(inv.stripeSessionExpiresAt).getTime() - Date.now() > 5 * 60 * 1000;
+
+  if (!stillValid) {
+    try {
+      const sess = await stripeLib.createCheckoutSessionForInvoice(inv, { successUrl, cancelUrl });
+      patch.stripeSessionId = sess.sessionId;
+      patch.stripeSessionUrl = sess.url;
+      patch.stripeSessionExpiresAt = sess.expiresAt;
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  if (Object.keys(patch).length > 0) {
+    invoicesRepo.update(inv.id, patch, { actor, description: `Pay link prepared for ${inv.invoiceNumber} send` });
+  }
+
+  const publicUrl = `${APP_URL}/pay/${token}`;
+  const enriched = enrichInvoice(invoicesRepo.find(inv.id));
+
+  const { sendInvoicePayLinkEmail } = require('./email');
+  const result = await sendInvoicePayLinkEmail(enriched, {
+    to: recipient,
+    payUrl: publicUrl,
+  });
+
+  res.json({
+    success: true,
+    sent: !!result.sent,
+    reason: result.reason || null,
+    recipient,
+    publicUrl,
+  });
+});
+
+// ============================================================
+// PAY LINKS — standalone (not tied to an invoice)
+// ============================================================
+
+app.get('/api/admin/pay-links', auth, (req, res) => {
+  res.json({ payLinks: payLinks.listPayLinks() });
+});
+
+// POST /api/admin/pay-links
+// Body: { amount, description?, customerName?, customerEmail? }
+app.post('/api/admin/pay-links', auth, async (req, res) => {
+  if (!stripeLib.isConfigured()) {
+    return res.status(400).json({ error: 'Stripe is not configured' });
+  }
+  try {
+    const actor = actorFromReq(req);
+    const pl = payLinks.createPayLink(req.body, { actor });
+
+    const APP_URL = stripeLib.APP_URL;
+    const successUrl = `${APP_URL}/pay/${pl.payToken}/success?session_id={CHECKOUT_SESSION_ID}`;
+    const cancelUrl = `${APP_URL}/pay/${pl.payToken}`;
+
+    let sess;
+    try {
+      sess = await stripeLib.createStandalonePayLinkSession({
+        amount: pl.amount,
+        description: pl.description,
+        customerEmail: pl.customerEmail || undefined,
+        successUrl,
+        cancelUrl,
+        metadata: { frontline_pay_link_id: pl.id },
+      });
+    } catch (err) {
+      // Roll back the local record so we don't leave an orphan.
+      payLinks.cancelPayLink(pl.id, { actor: 'system', description: 'Stripe session creation failed' });
+      return res.status(500).json({ error: err.message });
+    }
+
+    const updated = payLinks.updatePayLink(
+      pl.id,
+      {
+        stripeSessionId: sess.sessionId,
+        stripeSessionUrl: sess.url,
+        stripeSessionExpiresAt: sess.expiresAt,
+      },
+      { actor, description: `Stripe Checkout session created for pay link $${pl.amount.toFixed(2)}` }
+    );
+
+    res.json({
+      success: true,
+      payLink: updated,
+      publicUrl: `${APP_URL}/pay/${pl.payToken}`,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/pay-links/:id', auth, (req, res) => {
+  try {
+    const actor = actorFromReq(req);
+    const pl = payLinks.cancelPayLink(req.params.id, { actor });
+    if (!pl) return res.status(404).json({ error: 'Pay link not found' });
+    res.json({ success: true, payLink: pl });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// PUBLIC pay endpoints (no auth — customer-facing)
+// ============================================================
+
+// GET /api/pay/:token
+// Returns the data needed to render the customer-facing pay page for
+// either an invoice or a standalone pay link. Only returns the
+// fields the customer needs — never the internal invoice record in
+// full, never PII-heavy fields we don't want on a public URL.
+app.get('/api/pay/:token', (req, res) => {
+  const token = req.params.token;
+
+  // Check invoices first.
+  const inv = invoicesRepo.all().find(i => i.payToken === token);
+  if (inv) {
+    const { balance, paidAmount } = getInvoiceTotals(inv);
+    return res.json({
+      kind: 'invoice',
+      invoiceNumber: inv.invoiceNumber,
+      customerName: inv.customerName,
+      customerEmail: inv.customerEmail || null,
+      items: (inv.items || []).map(item => ({
+        description: item.description,
+        quantity: Number(item.quantity),
+        rate: Number(item.rate),
+        amount: Math.round(Number(item.quantity) * Number(item.rate) * 100) / 100,
+      })),
+      subtotal: Number(inv.subtotal),
+      tax: Number(inv.tax),
+      taxRate: Number(inv.taxRate || 0.085),
+      total: Number(inv.total),
+      paidAmount,
+      balance,
+      status: balance <= 0.005 ? 'paid' : 'unpaid',
+      dueDate: inv.dueDate || null,
+      notes: inv.notes || null,
+      stripeCheckoutUrl: balance > 0.005 ? inv.stripeSessionUrl : null,
+      stripeCheckoutExpiresAt: inv.stripeSessionExpiresAt || null,
+    });
+  }
+
+  // Then standalone pay links.
+  const pl = payLinks.getPayLinkByToken(token);
+  if (pl) {
+    return res.json({
+      kind: 'standalone',
+      description: pl.description,
+      customerName: pl.customerName || null,
+      customerEmail: pl.customerEmail || null,
+      amount: Number(pl.amount),
+      status: pl.status,
+      stripeCheckoutUrl: pl.status === 'pending' ? pl.stripeSessionUrl : null,
+      stripeCheckoutExpiresAt: pl.stripeSessionExpiresAt || null,
+      paidAt: pl.paidAt || null,
+    });
+  }
+
+  return res.status(404).json({ error: 'Pay link not found or expired' });
+});
+
+// POST /api/pay/:token/refresh
+// Regenerate the Stripe Checkout Session for a pay link that's
+// expired or has otherwise lost its session. Public endpoint because
+// the customer might land on the pay page after the session TTL
+// elapsed; we want "Pay Now" to Just Work without them having to
+// call Jimmy to refresh it.
+app.post('/api/pay/:token/refresh', async (req, res) => {
+  if (!stripeLib.isConfigured()) {
+    return res.status(400).json({ error: 'Online payments are not available right now — please call us' });
+  }
+  const token = req.params.token;
+  const APP_URL = stripeLib.APP_URL;
+  const successUrl = `${APP_URL}/pay/${token}/success?session_id={CHECKOUT_SESSION_ID}`;
+  const cancelUrl = `${APP_URL}/pay/${token}`;
+
+  // Invoice pay link
+  const inv = invoicesRepo.all().find(i => i.payToken === token);
+  if (inv) {
+    const { balance } = getInvoiceTotals(inv);
+    if (balance <= 0.005) return res.status(400).json({ error: 'Invoice is already paid' });
+    try {
+      const sess = await stripeLib.createCheckoutSessionForInvoice(inv, { successUrl, cancelUrl });
+      invoicesRepo.update(
+        inv.id,
+        {
+          stripeSessionId: sess.sessionId,
+          stripeSessionUrl: sess.url,
+          stripeSessionExpiresAt: sess.expiresAt,
+        },
+        { actor: 'public-pay-page', description: `Refreshed pay link session for ${inv.invoiceNumber}` }
+      );
+      return res.json({ success: true, stripeCheckoutUrl: sess.url });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Standalone pay link
+  const pl = payLinks.getPayLinkByToken(token);
+  if (pl) {
+    if (pl.status !== 'pending') {
+      return res.status(400).json({ error: `Pay link is ${pl.status}` });
+    }
+    try {
+      const sess = await stripeLib.createStandalonePayLinkSession({
+        amount: pl.amount,
+        description: pl.description,
+        customerEmail: pl.customerEmail || undefined,
+        successUrl,
+        cancelUrl,
+        metadata: { frontline_pay_link_id: pl.id },
+      });
+      payLinks.updatePayLink(
+        pl.id,
+        {
+          stripeSessionId: sess.sessionId,
+          stripeSessionUrl: sess.url,
+          stripeSessionExpiresAt: sess.expiresAt,
+        },
+        { actor: 'public-pay-page', description: 'Refreshed pay link session' }
+      );
+      return res.json({ success: true, stripeCheckoutUrl: sess.url });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  res.status(404).json({ error: 'Pay link not found' });
 });
 
 // Create invoice from job (manual — kept for Phase 1.1 "Create Invoice" button)
