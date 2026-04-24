@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, X, DollarSign, Clock, AlertTriangle, CreditCard, ChevronDown, ChevronRight, Trash2, Ban, CircleDollarSign, Calendar } from 'lucide-react'
+import { Plus, X, DollarSign, Clock, AlertTriangle, CreditCard, ChevronDown, ChevronRight, Trash2, Ban, CircleDollarSign, Calendar, UserPlus, CheckCircle2 } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
@@ -194,22 +194,198 @@ export default function AdminBills() {
         )}
       </div>
 
-      {showNew && <NewBillDialog vendors={vendors} accounts={expenseAccounts} onClose={() => setShowNew(false)} onSave={handleCreate} />}
+      {showNew && (
+        <NewBillDialog
+          vendors={vendors}
+          accounts={expenseAccounts}
+          onClose={() => setShowNew(false)}
+          onSave={handleCreate}
+          onVendorsChanged={fetchData}
+        />
+      )}
       {showPay && <PayBillDialog bill={showPay} onClose={() => setShowPay(null)} onPay={handlePay} />}
     </AdminLayout>
   )
 }
 
-function NewBillDialog({ vendors, accounts, onClose, onSave }) {
+function NewBillDialog({ vendors, accounts, onClose, onSave, onVendorsChanged }) {
   const [form, setForm] = useState({ vendorId: '', amount: '', dueDate: '', description: '', reference: '', accountId: '' })
   const [saving, setSaving] = useState(false)
+  // Inline vendor-create state. When the user picks "+ Add new vendor" in
+  // the dropdown we flip this to a mini-form instead of navigating away.
+  const [localVendors, setLocalVendors] = useState(vendors)
+  const [showNewVendor, setShowNewVendor] = useState(false)
+  const [newVendor, setNewVendor] = useState({ name: '', email: '', phone: '', address: '', taxId: '', is1099: false })
+  const [savingVendor, setSavingVendor] = useState(false)
+  const [vendorError, setVendorError] = useState('')
+  const [justCreatedName, setJustCreatedName] = useState('')
+
+  // Keep the dropdown in sync if the parent re-fetches vendors while the
+  // modal's open (rare, but possible if another tab adds one).
+  useEffect(() => { setLocalVendors(vendors) }, [vendors])
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const setV = (k, v) => setNewVendor(n => ({ ...n, [k]: v }))
+
+  const handleVendorDropdownChange = (e) => {
+    const val = e.target.value
+    if (val === '__new__') {
+      setShowNewVendor(true)
+      // Keep previous selection intact so if the user cancels the quick-
+      // add, the dropdown doesn't land on the sentinel.
+      return
+    }
+    set('vendorId', val)
+  }
+
+  const handleCreateVendor = async (e) => {
+    e.preventDefault()
+    setVendorError('')
+    const name = newVendor.name.trim()
+    if (!name) { setVendorError('Vendor name is required'); return }
+    setSavingVendor(true)
+    const res = await adminFetch('/api/accounting/vendors', {
+      method: 'POST',
+      body: JSON.stringify(newVendor),
+    })
+    setSavingVendor(false)
+    if (res?.data?.id) {
+      const created = res.data
+      setLocalVendors(list => [...list, created])
+      set('vendorId', created.id)
+      setJustCreatedName(created.name)
+      setShowNewVendor(false)
+      setNewVendor({ name: '', email: '', phone: '', address: '', taxId: '', is1099: false })
+      // Refresh the parent's vendor list so future bills see the new vendor too.
+      onVendorsChanged?.()
+      // Fade the "just created" confirmation after a couple seconds.
+      setTimeout(() => setJustCreatedName(''), 3000)
+    } else {
+      setVendorError(res?.error || 'Failed to create vendor')
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b"><h3 className="font-display font-bold text-lg">New Bill</h3><button onClick={onClose}><X size={20} /></button></div>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b">
+          <h3 className="font-display font-bold text-lg">New Bill</h3>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
         <form className="p-5 space-y-4" onSubmit={async e => { e.preventDefault(); setSaving(true); await onSave(form); setSaving(false) }}>
-          <div><label className="block text-xs font-medium text-gray-700 mb-1">Vendor *</label><select required value={form.vendorId} onChange={e => set('vendorId', e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white"><option value="">Select vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
+          {/* Vendor dropdown with inline "+ Add new vendor" option. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Vendor *</label>
+            <select
+              required
+              value={form.vendorId}
+              onChange={handleVendorDropdownChange}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-forest-500 outline-none"
+            >
+              <option value="">Select vendor</option>
+              {localVendors.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.name}{v.is1099 ? ' (1099)' : ''}
+                </option>
+              ))}
+              <option disabled>──────────</option>
+              <option value="__new__">+ Add new vendor…</option>
+            </select>
+            {justCreatedName && (
+              <p className="mt-1 text-[11px] text-green-700 flex items-center gap-1">
+                <CheckCircle2 size={11} />Added "{justCreatedName}" to the vendor list.
+              </p>
+            )}
+          </div>
+
+          {/* Inline vendor quick-add panel. Not a separate modal so the
+              bill form's state (amount, due date, etc) isn't lost. */}
+          {showNewVendor && (
+            <div className="rounded-lg border-2 border-forest-200 bg-forest-50 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-sm font-semibold text-forest-900">
+                  <UserPlus size={14} />Quick-Add Vendor
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowNewVendor(false); setVendorError(''); }}
+                  className="text-forest-700 hover:text-forest-900"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Vendor Name *</label>
+                <input
+                  autoFocus
+                  value={newVendor.name}
+                  onChange={e => setV('name', e.target.value)}
+                  placeholder="e.g., BugOut Chemical Supply"
+                  className="w-full px-3 py-1.5 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Phone</label>
+                  <input
+                    value={newVendor.phone}
+                    onChange={e => setV('phone', e.target.value)}
+                    placeholder="Optional"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs focus:border-forest-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Email</label>
+                  <input
+                    type="email"
+                    value={newVendor.email}
+                    onChange={e => setV('email', e.target.value)}
+                    placeholder="Optional"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs focus:border-forest-500 outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Address</label>
+                <input
+                  value={newVendor.address}
+                  onChange={e => setV('address', e.target.value)}
+                  placeholder="Optional — required for 1099 filings"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs focus:border-forest-500 outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+                <div>
+                  <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Tax ID (SSN / EIN)</label>
+                  <input
+                    value={newVendor.taxId}
+                    onChange={e => setV('taxId', e.target.value)}
+                    placeholder="Required for 1099"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-mono focus:border-forest-500 outline-none"
+                  />
+                </div>
+                <label className="inline-flex items-center gap-1.5 text-xs text-gray-800 pb-1.5 whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={newVendor.is1099}
+                    onChange={e => setV('is1099', e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-gray-300 text-forest-600 focus:ring-forest-500"
+                  />
+                  1099 contractor
+                </label>
+              </div>
+              {vendorError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{vendorError}</div>}
+              <button
+                type="button"
+                onClick={handleCreateVendor}
+                disabled={savingVendor || !newVendor.name.trim()}
+                className="w-full bg-forest-700 hover:bg-forest-800 disabled:opacity-50 text-white text-xs font-semibold py-2 rounded-lg"
+              >
+                {savingVendor ? 'Adding…' : 'Add Vendor & Continue'}
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div><label className="block text-xs font-medium text-gray-700 mb-1">Amount *</label><input type="number" step="0.01" min="0.01" required value={form.amount} onChange={e => set('amount', e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" /></div>
             <div><label className="block text-xs font-medium text-gray-700 mb-1">Due Date *</label><input type="date" required value={form.dueDate} onChange={e => set('dueDate', e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" /></div>
@@ -217,7 +393,7 @@ function NewBillDialog({ vendors, accounts, onClose, onSave }) {
           <div><label className="block text-xs font-medium text-gray-700 mb-1">Category</label><select value={form.accountId} onChange={e => set('accountId', e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white"><option value="">Select category</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
           <div><label className="block text-xs font-medium text-gray-700 mb-1">Description</label><textarea value={form.description} onChange={e => set('description', e.target.value)} rows={2} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none" /></div>
           <div><label className="block text-xs font-medium text-gray-700 mb-1">Reference #</label><input value={form.reference} onChange={e => set('reference', e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" /></div>
-          <button type="submit" disabled={saving} className="w-full btn-primary py-2.5 disabled:opacity-50">{saving ? 'Creating...' : 'Create Bill'}</button>
+          <button type="submit" disabled={saving || !form.vendorId} className="w-full btn-primary py-2.5 disabled:opacity-50">{saving ? 'Creating...' : 'Create Bill'}</button>
         </form>
       </div>
     </div>
