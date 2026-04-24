@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Calculator, Save, DollarSign, FileText, Calendar, CheckCircle, AlertTriangle, Clock } from 'lucide-react'
+import { Calculator, Save, DollarSign, FileText, Calendar, CheckCircle, AlertTriangle, Clock, Download, UserCheck } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency } from '../hooks/useAdmin'
 
@@ -22,6 +22,8 @@ export default function AdminTax() {
   const [settings, setSettings] = useState({ federalRate: '22', stateRate: '5', stateName: 'Oklahoma', filingType: 'sole_prop', selfEmploymentRate: '15.3', qbiDeduction: true, taxpayerName: 'Jimmy Manharth', taxpayerSSN: '', spouseName: '', spouseSSN: '', address: '', city: 'Edmond', taxState: 'OK', zip: '' })
   const [income, setIncome] = useState(null)
   const [payments, setPayments] = useState([])
+  const [report1099, setReport1099] = useState(null)
+  const [report1099Year, setReport1099Year] = useState(new Date().getFullYear())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const navigate = useNavigate()
@@ -29,16 +31,18 @@ export default function AdminTax() {
 
   const fetchData = useCallback(async () => {
     if (!getToken()) { navigate('/admin'); return }
-    const [settingsRes, incomeRes, paymentsRes] = await Promise.all([
+    const [settingsRes, incomeRes, paymentsRes, report1099Res] = await Promise.all([
       adminFetch('/api/accounting/tax-settings'),
       adminFetch(`/api/accounting/income-statement?start=${year}-01-01&end=${year}-12-31`),
       adminFetch(`/api/accounting/quarterly-payments/${year}`),
+      adminFetch(`/api/accounting/1099-report?year=${report1099Year}`),
     ])
     if (settingsRes?.data) setSettings(settingsRes.data)
     if (incomeRes?.data) setIncome(incomeRes.data)
     if (paymentsRes?.data) setPayments(paymentsRes.data)
+    if (report1099Res?.data) setReport1099(report1099Res.data)
     setLoading(false)
-  }, [navigate, year])
+  }, [navigate, year, report1099Year])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -147,6 +151,143 @@ export default function AdminTax() {
           </tbody>
         </table>
       </div>
+
+      {/* 1099 Contractors (NEC) — required filing by Jan 31 of the
+          following year for any vendor paid $600+ in reportable methods. */}
+      {report1099 && (
+        <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm mb-6">
+          <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
+            <div>
+              <h3 className="font-display font-bold text-base flex items-center gap-2">
+                <UserCheck size={18} className="text-forest-700" />1099-NEC Contractors
+              </h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Vendors flagged as 1099 contractors, with year-to-date totals.
+                Payments of <strong>$600+</strong> in cash/check/ACH/transfer trigger a 1099-NEC filing by Jan 31.
+                Credit card + Stripe payments are reported by the processor on 1099-K, not here.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={report1099Year}
+                onChange={e => setReport1099Year(Number(e.target.value))}
+                className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm bg-white"
+              >
+                {[year + 1, year, year - 1, year - 2, year - 3].map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+              <a
+                href={`/api/accounting/1099-report/csv?year=${report1099Year}`}
+                download
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 hover:bg-gray-50 inline-flex items-center gap-1"
+                title="Download the full report as CSV to hand to your CPA"
+              >
+                <Download size={14} />Export CSV
+              </a>
+            </div>
+          </div>
+
+          {/* Summary tiles */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">1099 Vendors</div>
+              <div className="text-xl font-display font-bold text-charcoal-900 mt-0.5">{report1099.summary.vendors1099}</div>
+            </div>
+            <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Need 1099-NEC</div>
+              <div className="text-xl font-display font-bold text-amber-700 mt-0.5">{report1099.summary.needing1099}</div>
+              <div className="text-[10px] text-amber-600 mt-0.5">threshold ${report1099.summary.threshold}</div>
+            </div>
+            <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Reportable Paid</div>
+              <div className="text-xl font-display font-bold text-charcoal-900 mt-0.5 tabular-nums">{formatCurrency(report1099.summary.totalReportable)}</div>
+              <div className="text-[10px] text-gray-500 mt-0.5">goes on 1099-NEC</div>
+            </div>
+            <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Non-Reportable</div>
+              <div className="text-xl font-display font-bold text-gray-700 mt-0.5 tabular-nums">{formatCurrency(report1099.summary.totalNonReportable)}</div>
+              <div className="text-[10px] text-gray-500 mt-0.5">card/Stripe</div>
+            </div>
+          </div>
+
+          {/* Missing info warning */}
+          {report1099.summary.missingInfo > 0 && (
+            <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 flex items-start gap-2 text-xs text-amber-900">
+              <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong>{report1099.summary.missingInfo} vendor{report1099.summary.missingInfo === 1 ? '' : 's'} missing info.</strong>{' '}
+                You need a Tax ID (SSN or EIN) and a mailing address for every 1099-NEC filing.
+                Update the vendor records under Expenses → Add Vendor, or click a row below.
+              </div>
+            </div>
+          )}
+
+          {/* Vendor table */}
+          {report1099.vendors.length === 0 ? (
+            <div className="text-center py-8 text-sm text-gray-500 bg-gray-50 rounded-lg">
+              No 1099-flagged vendors yet, and no payments on record for {report1099.summary.year}.
+              <div className="text-xs text-gray-400 mt-1">Flag a vendor as 1099 under Expenses → Add Vendor or edit an existing one.</div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100 text-left text-[10px] uppercase tracking-wider text-gray-500">
+                    <th className="px-3 py-2 font-semibold">Vendor</th>
+                    <th className="px-3 py-2 font-semibold">Tax ID</th>
+                    <th className="px-3 py-2 font-semibold text-right">Reportable</th>
+                    <th className="px-3 py-2 font-semibold text-right hidden md:table-cell">Non-Reportable</th>
+                    <th className="px-3 py-2 font-semibold text-right">Total</th>
+                    <th className="px-3 py-2 font-semibold">1099?</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {report1099.vendors.map(v => (
+                    <tr key={v.id} className={v.needs1099 ? 'bg-amber-50/30' : ''}>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-charcoal-900">{v.name}</div>
+                        {v.is1099 && !v.needs1099 && (
+                          <div className="text-[10px] text-gray-400">1099-flagged</div>
+                        )}
+                        {!v.address && v.needs1099 && (
+                          <div className="text-[10px] text-amber-700">⚠ Missing address</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-gray-700 font-mono">
+                        {v.taxId || (v.needs1099
+                          ? <span className="text-amber-700">⚠ Missing</span>
+                          : <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(v.totals.reportable)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-500 hidden md:table-cell">{formatCurrency(v.totals.nonReportable)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold">{formatCurrency(v.totals.total)}</td>
+                      <td className="px-3 py-2">
+                        {v.needs1099 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800">
+                            <AlertTriangle size={10} />File 1099-NEC
+                          </span>
+                        ) : v.is1099 ? (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">
+                            Under threshold
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">N/A (not 1099)</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="text-[10px] text-gray-400 mt-3 italic">
+            Note: this report aggregates payments across the direct expenses feed AND bill payments (AP). Voided payments are excluded. Consult your CPA for edge cases like attorney fees (always reportable regardless of amount or entity type) or payments to incorporated vendors.
+          </p>
+        </div>
+      )}
 
       {/* Quarterly Payments */}
       <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">

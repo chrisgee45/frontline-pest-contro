@@ -241,6 +241,29 @@ function createAccountingRoutes(authMiddleware) {
   router.get('/quarterly-payments/:year', (req, res) => { res.json({ ok: true, data: acct.getQuarterlyPayments(Number(req.params.year)) }); });
   router.put('/quarterly-payments', (req, res) => { res.json({ ok: true, data: acct.saveQuarterlyPayment(req.body) }); });
 
+  // === 1099 Vendor Report ===
+  // Legally required by Jan 31 of each year for any 1099-flagged vendor
+  // who received $600+ in reportable-method payments during the year.
+  const taxReports = require('./tax-reports');
+  router.get('/1099-report', (req, res) => {
+    try {
+      const year = Number(req.query.year) || new Date().getUTCFullYear();
+      const report = taxReports.build1099Report(year);
+      res.json({ ok: true, data: report });
+    } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  });
+
+  router.get('/1099-report/csv', (req, res) => {
+    try {
+      const year = Number(req.query.year) || new Date().getUTCFullYear();
+      const report = taxReports.build1099Report(year);
+      const csv = taxReports.render1099CSV(report);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="frontline-1099-report-${year}.csv"`);
+      res.send(csv);
+    } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  });
+
   // === Audit Trail ===
   router.get('/audit-logs', (req, res) => {
     const filters = {};
