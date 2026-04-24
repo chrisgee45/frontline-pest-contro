@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Kanban, FileText, DollarSign, TrendingUp, TrendingDown, Clock, ArrowUpRight, UserPlus, Briefcase, Receipt, Calculator } from 'lucide-react'
+import { Users, Kanban, FileText, DollarSign, TrendingUp, TrendingDown, Clock, ArrowUpRight, UserPlus, Briefcase, Receipt, Calculator, Info } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, formatCurrency, timeAgo, getToken } from '../hooks/useAdmin'
 
@@ -43,6 +43,16 @@ export default function AdminDashboard() {
 
   return (
     <AdminLayout>
+      {/* Basis label — Dashboard tiles reflect actual cash movement.
+          The Financials page uses accrual basis (which includes bills
+          owed but not yet paid) and may show different totals. */}
+      <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-center gap-2 text-[11px] text-gray-600">
+        <Info size={12} className="text-gray-500 shrink-0" />
+        <span>
+          <strong>Cash basis</strong> — these tiles reflect money actually received or paid. For accrual-basis reports (including unpaid bills and invoices), see the <a href="/admin/financials" className="underline">Financials</a> page.
+        </span>
+      </div>
+
       {/* Stats grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={Users} label="New Leads" value={d.leads.new} sub={`${d.leads.total} total`} color="bg-blue-600" />

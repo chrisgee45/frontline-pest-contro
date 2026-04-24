@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { DollarSign, TrendingUp, TrendingDown, Wallet, ChevronDown, ChevronRight, Plus, X, Ban, Search } from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, Wallet, ChevronDown, ChevronRight, Plus, X, Ban, Search, Info } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken, formatCurrency, formatDate } from '../hooks/useAdmin'
 
@@ -137,6 +137,21 @@ export default function AdminFinancials() {
           <button onClick={() => setShowRevDialog(true)} className="btn-primary text-xs py-1.5 px-3"><Plus size={14} />Revenue</button>
           <button onClick={() => setShowExpDialog(true)} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 hover:bg-gray-100 inline-flex items-center gap-1"><Plus size={14} />Expense</button>
           <button onClick={() => setShowDrawDialog(true)} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 hover:bg-gray-100 inline-flex items-center gap-1">Draw</button>
+        </div>
+      </div>
+
+      {/* Accounting basis banner — these reports are accrual-basis
+          (include bills owed and revenue earned regardless of whether
+          cash has moved). The Dashboard's Total Revenue/Expenses tiles
+          are cash-basis (money actually received or paid). For a
+          service business where most invoices are paid immediately
+          the two will usually match closely. */}
+      <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 flex items-start gap-3 text-xs text-blue-900">
+        <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />
+        <div>
+          <strong>Accrual basis</strong> — these reports include everything posted to the ledger: paid, unpaid, and accrued.
+          Revenue is recognized when payment is recorded; expenses are recognized when bills are entered (not when paid).
+          The Dashboard tiles use <strong>cash basis</strong> (actual money movement) and may differ when there are open bills or unrecorded payments.
         </div>
       </div>
 
