@@ -33,14 +33,20 @@ export default function Hero() {
           </p>
 
           {/* CTAs */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-10">
+          <div className="flex flex-col sm:flex-row gap-4 mb-4">
             <a href="tel:4055311034" className="btn-cta">
               <Phone size={22} />
-              Call Now — (405) 531-1034
+              Call Jimmy — (405) 531-1034
             </a>
             <a href="#contact" className="btn-secondary text-lg py-4 px-8">
               <FileText size={20} />
               Get a Free Quote
+            </a>
+          </div>
+          <div className="mb-10">
+            <a href="tel:3468688231" className="inline-flex items-center gap-2 text-white font-semibold hover:text-amber-400 transition-colors">
+              <Phone size={18} />
+              Or call Jarret — (346) 868-8231
             </a>
           </div>
 

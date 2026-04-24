@@ -25,7 +25,11 @@ export default function ServiceArea() {
             <div className="flex flex-col sm:flex-row gap-4">
               <a href="tel:4055311034" className="btn-cta">
                 <Phone size={20} />
-                Call (405) 531-1034
+                Call Jimmy (405) 531-1034
+              </a>
+              <a href="tel:3468688231" className="btn-cta">
+                <Phone size={20} />
+                Call Jarret (346) 868-8231
               </a>
               <a href="#contact" className="inline-flex items-center justify-center gap-2 bg-transparent border-2 border-white/30 hover:border-white/60 text-white font-semibold px-6 py-3 rounded-lg transition-colors">
                 <MapPin size={18} />

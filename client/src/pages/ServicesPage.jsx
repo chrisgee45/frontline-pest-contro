@@ -174,7 +174,11 @@ export default function ServicesPage() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <a href="tel:4055311034" className="btn-cta">
               <Phone size={20} />
-              Call (405) 531-1034
+              Call Jimmy (405) 531-1034
+            </a>
+            <a href="tel:3468688231" className="btn-cta">
+              <Phone size={20} />
+              Call Jarret (346) 868-8231
             </a>
             <Link to="/contact" className="btn-secondary text-lg py-4 px-8">
               Request Free Inspection

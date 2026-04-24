@@ -160,7 +160,11 @@ export default function AboutPage() {
                 </p>
                 <a href="tel:4055311034" className="btn-cta w-full justify-center">
                   <Phone size={20} />
-                  Call (405) 531-1034
+                  Call Jimmy (405) 531-1034
+                </a>
+                <a href="tel:3468688231" className="btn-cta w-full justify-center mt-3">
+                  <Phone size={20} />
+                  Call Jarret (346) 868-8231
                 </a>
               </div>
             </div>
@@ -182,7 +186,11 @@ export default function AboutPage() {
             </Link>
             <a href="tel:4055311034" className="btn-secondary text-lg py-4 px-8">
               <Phone size={20} />
-              Call Now
+              Call Jimmy
+            </a>
+            <a href="tel:3468688231" className="btn-secondary text-lg py-4 px-8">
+              <Phone size={20} />
+              Call Jarret
             </a>
           </div>
         </div>
