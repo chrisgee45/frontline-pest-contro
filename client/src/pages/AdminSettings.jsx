@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, Eye, EyeOff, CheckCircle, User, Mail, Database, Download, Upload, Camera, RotateCcw, AlertTriangle, Clock } from 'lucide-react'
+import { Lock, Eye, EyeOff, CheckCircle, User, Mail, Database, Download, Upload, Camera, RotateCcw, AlertTriangle, Clock, Shield, Unlock } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
 import { adminFetch, getToken } from '../hooks/useAdmin'
 
@@ -168,6 +168,9 @@ export default function AdminSettings() {
 
         {/* Data Backup & Restore */}
         <BackupSection />
+
+        {/* Closed Periods / Prior-Year Lock */}
+        <ClosedPeriodsSection />
       </div>
     </AdminLayout>
   )
@@ -433,6 +436,199 @@ function BackupSection() {
           Only the 30 most recent snapshots are kept. Download important ones to your computer if you want to preserve them longer.
         </p>
       </div>
+    </div>
+  )
+}
+
+// ===================
+// CLOSED PERIODS / PRIOR-YEAR LOCK
+// ===================
+//
+// Once a tax year has been filed, its journal entries should be frozen
+// so nobody accidentally voids a 2024 payment in March 2026 and
+// invalidates the already-filed return. Closing a period makes
+// postJournalEntry + voidJournalEntry reject any change inside the
+// closed date range. Reopening takes an explicit action with a reason.
+
+function ClosedPeriodsSection() {
+  const [periods, setPeriods] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showClose, setShowClose] = useState(false)
+  const [closeDate, setCloseDate] = useState('')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const fetchPeriods = async () => {
+    setLoading(true)
+    const res = await adminFetch('/api/accounting/closed-periods')
+    if (res?.data) setPeriods(res.data)
+    setLoading(false)
+  }
+
+  useEffect(() => { fetchPeriods() }, [])
+
+  const handleClose = async (e) => {
+    e.preventDefault()
+    setSaving(true); setError('')
+    const res = await adminFetch('/api/accounting/closed-periods', {
+      method: 'POST',
+      body: JSON.stringify({ closeDate, reason }),
+    })
+    setSaving(false)
+    if (res?.ok) {
+      setShowClose(false)
+      setCloseDate(''); setReason('')
+      fetchPeriods()
+    } else {
+      setError(res?.error || 'Failed to close period')
+    }
+  }
+
+  const handleReopen = async (period) => {
+    const r = prompt(`Reopen the period through ${period.closeDate}? This lets you edit or void entries in that date range again. Reason for reopening (will be logged):`)
+    if (!r || !r.trim()) return
+    const res = await adminFetch(`/api/accounting/closed-periods/${period.id}/reopen`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: r }),
+    })
+    if (res?.ok) {
+      fetchPeriods()
+    } else {
+      alert(res?.error || 'Failed to reopen')
+    }
+  }
+
+  const activePeriods = periods.filter(p => !p.reopenedAt)
+  const reopenedPeriods = periods.filter(p => p.reopenedAt)
+
+  return (
+    <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-display font-bold text-base text-charcoal-900 flex items-center gap-2">
+            <Shield size={18} className="text-forest-700" />
+            Closed Periods / Prior-Year Lock
+          </h3>
+          <p className="text-xs text-gray-500 mt-1 max-w-xl">
+            After filing taxes for a year, close that period so nothing accidentally changes.
+            Closing locks every journal entry dated on or before the close date &mdash; no void, no new backdated entry.
+            Reopen is possible but requires an explicit reason (logged in the audit trail).
+          </p>
+        </div>
+        <button onClick={() => setShowClose(true)} className="btn-primary text-xs py-1.5 px-3 shrink-0">
+          <Lock size={14} />Close Period
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-6 text-sm text-gray-400">Loading…</div>
+      ) : periods.length === 0 ? (
+        <div className="text-center py-6 text-sm text-gray-500 bg-gray-50 rounded-lg">
+          No closed periods yet. Close your books at the end of each tax year to lock them.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {activePeriods.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Active Locks</div>
+              <div className="space-y-2">
+                {activePeriods.map(p => (
+                  <div key={p.id} className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+                    <div className="flex items-start gap-2 flex-1 min-w-0">
+                      <Lock size={14} className="text-amber-700 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-charcoal-900">
+                          Locked through {p.closeDate}
+                        </div>
+                        <div className="text-xs text-amber-800 mt-0.5">{p.reason}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                          Closed {new Date(p.closedAt).toLocaleDateString()} by {p.closedBy}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleReopen(p)}
+                      className="px-2 py-1 rounded text-[10px] font-medium text-amber-800 hover:bg-amber-100 inline-flex items-center gap-1 shrink-0"
+                      title="Reopen this period (requires a reason)"
+                    >
+                      <Unlock size={12} />Reopen
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {reopenedPeriods.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Reopened History</div>
+              <div className="space-y-2">
+                {reopenedPeriods.map(p => (
+                  <div key={p.id} className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+                    <div className="flex items-start gap-2">
+                      <Unlock size={12} className="text-gray-400 shrink-0 mt-0.5" />
+                      <div className="text-xs flex-1">
+                        <div className="text-gray-700">
+                          Period through <strong>{p.closeDate}</strong> was reopened on {new Date(p.reopenedAt).toLocaleDateString()} by {p.reopenedBy}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                          Original close reason: "{p.reason}" · Reopen reason: "{p.reopenReason}"
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {showClose && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowClose(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b">
+              <h3 className="font-display font-bold text-lg">Close a Period</h3>
+              <button onClick={() => setShowClose(false)}><EyeOff size={20} /></button>
+            </div>
+            <form onSubmit={handleClose} className="p-5 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2 text-xs text-amber-900">
+                <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  Closing a period locks <strong>every journal entry</strong> dated on or before the close date.
+                  You won't be able to void or backdate entries into this range until you explicitly reopen it.
+                  Typical usage: close December 31 after the tax return is filed.
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Close Through (Date)</label>
+                <input
+                  required
+                  type="date"
+                  value={closeDate}
+                  onChange={e => setCloseDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+                />
+                <p className="text-[10px] text-gray-400 mt-0.5">Everything on or before this date will be locked.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Reason (required)</label>
+                <input
+                  required
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                  placeholder="e.g., 2025 Schedule C filed"
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+                />
+              </div>
+              {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1.5">{error}</div>}
+              <button type="submit" disabled={saving} className="w-full btn-primary py-2.5 disabled:opacity-50">
+                {saving ? 'Closing…' : 'Close Period'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

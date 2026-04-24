@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { readJSON, writeJSON } = require('./data-dir');
 const { recordAudit } = require('./audit-helpers');
 const { repo } = require('./repo');
+const periodClose = require('./period-close');
 
 // Shared transactions feed for the dashboard — separate from the double-
 // entry journal entries. Expense and bill-payment writes post to both
@@ -111,6 +112,17 @@ function postJournalEntry(params) {
   }
   if (totalDebits <= 0) throw new Error('Journal must have a positive total');
 
+  // Period-close guard: refuse to post a backdated entry into a closed
+  // period. Must reopen the period first if it's truly needed.
+  // Reversal entries (voids) are allowed through this guard because
+  // they're handled separately in voidJournalEntry().
+  const entryDate = date || new Date().toISOString();
+  if (sourceType !== 'reversal' && periodClose.isClosedDate(entryDate)) {
+    throw new Error(
+      `Cannot post to a closed period (entry date ${entryDate.slice(0, 10)}). Reopen the period in Settings → Closed Periods first.`
+    );
+  }
+
   // Check for duplicate sourceId
   if (sourceId) {
     const entries = readJSON('journal_entries', []);
@@ -149,6 +161,14 @@ function postJournalEntry(params) {
 function voidJournalEntry(entryId, voidedBy) {
   const entries = readJSON('journal_entries', []);
   const entry = entries.find(e => e.id === entryId);
+  // Period-close guard: refuse to void an entry that falls inside a
+  // closed period. The correction has to happen in the current open
+  // period via a new adjusting entry, OR the period has to be reopened.
+  if (entry && !entry.isVoid && periodClose.isClosedDate(entry.date)) {
+    throw new Error(
+      `Cannot void entry from a closed period (${entry.date.slice(0, 10)}). Reopen the period in Settings → Closed Periods to make corrections to prior-year books.`
+    );
+  }
   if (!entry) throw new Error('Journal entry not found');
   if (entry.isVoid) throw new Error('Already voided');
 

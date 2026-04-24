@@ -241,6 +241,27 @@ function createAccountingRoutes(authMiddleware) {
   router.get('/quarterly-payments/:year', (req, res) => { res.json({ ok: true, data: acct.getQuarterlyPayments(Number(req.params.year)) }); });
   router.put('/quarterly-payments', (req, res) => { res.json({ ok: true, data: acct.saveQuarterlyPayment(req.body) }); });
 
+  // === Period close / prior-year lock ===
+  const periodClose = require('./period-close');
+  router.get('/closed-periods', (req, res) => {
+    res.json({ ok: true, data: periodClose.all() });
+  });
+  router.post('/closed-periods', (req, res) => {
+    try {
+      const actor = req.headers['x-actor'] || 'admin';
+      const entry = periodClose.closePeriod(req.body || {}, { actor });
+      res.json({ ok: true, data: entry });
+    } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  });
+  router.post('/closed-periods/:id/reopen', (req, res) => {
+    try {
+      const actor = req.headers['x-actor'] || 'admin';
+      const entry = periodClose.reopenPeriod(req.params.id, req.body || {}, { actor });
+      if (!entry) return res.status(404).json({ ok: false, error: 'Not found' });
+      res.json({ ok: true, data: entry });
+    } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  });
+
   // === 1099 Vendor Report ===
   // Legally required by Jan 31 of each year for any 1099-flagged vendor
   // who received $600+ in reportable-method payments during the year.
