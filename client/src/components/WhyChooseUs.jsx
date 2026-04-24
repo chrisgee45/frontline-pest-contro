@@ -1,4 +1,5 @@
 import { ShieldCheck, Clock, MapPin, Heart, Award, Leaf } from 'lucide-react'
+import { SpiderWeb, Spider } from './PestDecor'
 
 const reasons = [
   {
@@ -35,8 +36,21 @@ const reasons = [
 
 export default function WhyChooseUs() {
   return (
-    <section id="why-us" className="section-padding bg-charcoal-900">
-      <div className="container-max">
+    <section id="why-us" className="relative overflow-hidden section-padding bg-charcoal-900">
+      {/* Decorative cobwebs in the corners — subtle enough to read as
+          atmosphere, not decoration that fights the content. */}
+      <SpiderWeb className="pointer-events-none absolute top-0 left-0 w-64 md:w-96 h-64 md:h-96 text-forest-500/10" />
+      <SpiderWeb className="pointer-events-none absolute top-0 right-0 w-64 md:w-96 h-64 md:h-96 text-forest-500/10 -scale-x-100" />
+      <SpiderWeb className="pointer-events-none absolute bottom-0 right-0 w-40 md:w-56 h-40 md:h-56 text-forest-500/[0.07] -scale-100" />
+
+      {/* Spider dangling from a silk thread near the top-right on
+          desktop; centered on mobile where the corner webs overlap. */}
+      <Spider
+        withThread
+        className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 md:left-auto md:right-24 md:translate-x-0 w-10 md:w-14 h-[80px] md:h-[112px] text-forest-400/40"
+      />
+
+      <div className="relative container-max">
         {/* Section header */}
         <div className="text-center max-w-2xl mx-auto mb-12 md:mb-16">
           <span className="text-forest-400 font-semibold text-sm uppercase tracking-wider">Why Frontline</span>

@@ -1,8 +1,9 @@
 import { Phone, FileText, ShieldCheck, Clock, Award } from 'lucide-react'
+import { SpiderWeb, Spider } from './PestDecor'
 
 export default function Hero() {
   return (
-    <section className="relative min-h-[600px] md:min-h-[700px] flex items-center bg-charcoal-950 pt-28 md:pt-32">
+    <section className="relative min-h-[600px] md:min-h-[700px] flex items-center bg-charcoal-950 pt-28 md:pt-32 overflow-hidden">
       {/* Background image overlay */}
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
@@ -13,7 +14,16 @@ export default function Hero() {
         <div className="absolute inset-0 bg-gradient-to-r from-charcoal-950 via-charcoal-950/90 to-charcoal-950/60" />
       </div>
 
-      <div className="relative container-max px-4 sm:px-6 lg:px-8 py-12 md:py-20">
+      {/* Pest-themed decoration — subtle cobweb in the upper right,
+          plus a spider dangling on a silk thread. Placed behind the
+          content wrapper so the headline and buttons sit on top. */}
+      <SpiderWeb className="pointer-events-none absolute top-16 right-0 w-56 md:w-80 h-56 md:h-80 text-forest-300/15 -scale-x-100 z-[1]" />
+      <Spider
+        withThread
+        className="pointer-events-none absolute top-16 right-10 md:right-24 w-9 md:w-12 h-[72px] md:h-[96px] text-forest-300/50 z-[1]"
+      />
+
+      <div className="relative z-10 container-max px-4 sm:px-6 lg:px-8 py-12 md:py-20">
         <div className="max-w-2xl">
           {/* Badge */}
           <div className="inline-flex items-center gap-2 bg-forest-700/20 border border-forest-600/30 text-forest-300 text-sm font-medium px-4 py-1.5 rounded-full mb-6">
