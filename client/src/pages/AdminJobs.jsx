@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Plus, X, MapPin, Phone, Mail, Calendar, User, Trash2, FileText, UserCheck, UserSquare, Search } from 'lucide-react'
+import { Plus, X, MapPin, Phone, Mail, Calendar, User, Trash2, FileText, UserCheck, UserSquare, Search, Pencil } from 'lucide-react'
 import AdminLayout from '../components/AdminLayout'
-import { adminFetch, getToken, formatDate } from '../hooks/useAdmin'
+import LineItemsEditor from '../components/LineItemsEditor'
+import { adminFetch, getToken, formatDate, formatCurrency } from '../hooks/useAdmin'
 
 // Format a digits-only phone to 405-555-1212 for display.
 function fmtPhone(p) {
@@ -173,7 +174,14 @@ const COLUMNS = [
 
 const SERVICE_TYPES = ['Termite Treatment', 'General Pest Control', 'Rodent Control', 'Inspection', 'Other']
 
-function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, onCreateInvoice, cardRef, highlight }) {
+function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, onCreateInvoice, onEdit, cardRef, highlight }) {
+  // Running total of the job's line items — previews the invoice the
+  // customer will receive on completion.
+  const itemsTotal = Array.isArray(job.lineItems)
+    ? job.lineItems.reduce((s, li) => s + (Number(li.quantity) || 0) * (Number(li.rate) || 0), 0)
+    : 0
+  const itemsCount = Array.isArray(job.lineItems) ? job.lineItems.length : 0
+
   return (
     <div
       ref={cardRef}
@@ -190,6 +198,16 @@ function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, o
       {job.address && <p className="text-xs text-gray-500 flex items-center gap-1 mb-1"><MapPin size={11} />{job.address}</p>}
       {job.scheduledDate && <p className="text-xs text-gray-500 flex items-center gap-1 mb-1"><Calendar size={11} />{formatDate(job.scheduledDate)}</p>}
       <p className="text-xs text-gray-400 flex items-center gap-1"><User size={11} />{job.assignedTech}</p>
+
+      {/* Pre-completion summary of line items + total. Visible on the card
+          even when collapsed so Jimmy can see what a job is priced at
+          without clicking in. */}
+      {itemsCount > 0 && (
+        <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
+          <span className="text-gray-500">{itemsCount} line {itemsCount === 1 ? 'item' : 'items'}</span>
+          <span className="font-semibold text-charcoal-900">{formatCurrency(itemsTotal)}</span>
+        </div>
+      )}
 
       {expanded && (
         <div className="mt-3 pt-3 border-t border-gray-100 space-y-2" onClick={e => e.stopPropagation()}>
@@ -208,13 +226,39 @@ function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, o
             </div>
           )}
           {job.phone && <p className="text-xs flex items-center gap-1"><Phone size={11} className="text-gray-400" /><a href={`tel:${job.phone}`} className="text-forest-700 hover:underline">{job.phone}</a></p>}
+
+          {/* Line items preview inside the expanded card */}
+          {itemsCount > 0 && (
+            <div className="bg-gray-50 rounded border border-gray-200 p-2 space-y-1">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-1">Services &amp; Pricing</div>
+              {job.lineItems.map((li, i) => (
+                <div key={i} className="flex justify-between text-[11px]">
+                  <span className="text-gray-700 truncate pr-2">
+                    {li.description}
+                    {li.quantity > 1 && <span className="text-gray-400"> × {li.quantity}</span>}
+                  </span>
+                  <span className="text-gray-900 font-medium whitespace-nowrap">
+                    {formatCurrency((Number(li.quantity) || 0) * (Number(li.rate) || 0))}
+                  </span>
+                </div>
+              ))}
+              <div className="flex justify-between text-[11px] font-bold text-charcoal-900 border-t border-gray-200 pt-1 mt-1">
+                <span>Subtotal</span>
+                <span>{formatCurrency(itemsTotal)}</span>
+              </div>
+            </div>
+          )}
+
           {job.notes && <p className="text-xs text-gray-600 bg-gray-50 rounded p-2">{job.notes}</p>}
           <div className="flex flex-wrap gap-1 pt-1">
             {COLUMNS.filter(c => c.key !== job.status).map(c => (
               <button key={c.key} onClick={() => onStatusChange(job.id, c.key)} className={`px-2 py-1 rounded text-[10px] font-medium ${c.badge} hover:opacity-80`}>→ {c.label}</button>
             ))}
           </div>
-          <div className="flex gap-2 pt-1">
+          <div className="flex gap-2 pt-1 flex-wrap">
+            <button onClick={() => onEdit(job)} className="flex items-center gap-1 text-[10px] text-charcoal-800 font-medium hover:underline">
+              <Pencil size={11} />Edit Job
+            </button>
             {invoice ? (
               <Link
                 to={`/admin/invoices?focus=${invoice.id}`}
@@ -237,6 +281,61 @@ function JobCard({ job, invoice, expanded, onToggle, onStatusChange, onDelete, o
   )
 }
 
+// Shared form used by both New Job and Edit Job modals. Renders all the
+// fields plus the LineItemsEditor — the wrapper modals decide the title,
+// submit label, and whether the customer picker is shown.
+function JobFormFields({ form, setForm, showCustomerPicker }) {
+  return (
+    <>
+      {showCustomerPicker
+        ? <CustomerPicker form={form} setForm={setForm} />
+        : (
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Customer Name *</label>
+            <input
+              required
+              value={form.customerName}
+              onChange={e => setForm({ ...form, customerName: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none"
+            />
+          </div>
+        )
+      }
+      <div className="grid grid-cols-2 gap-4">
+        <div><label className="block text-xs font-medium text-gray-700 mb-1">Phone</label><input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+        <div><label className="block text-xs font-medium text-gray-700 mb-1">Email</label><input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+      </div>
+      <div><label className="block text-xs font-medium text-gray-700 mb-1">Address</label><input value={form.address} onChange={e => setForm({...form, address: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">Service Type *</label>
+          <select value={form.serviceType} onChange={e => setForm({...form, serviceType: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-forest-500 outline-none">
+            {SERVICE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <p className="text-[10px] text-gray-400 mt-0.5">Headline category for the kanban card.</p>
+        </div>
+        <div><label className="block text-xs font-medium text-gray-700 mb-1">Scheduled Date</label><input type="date" value={form.scheduledDate} onChange={e => setForm({...form, scheduledDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+      </div>
+      <div><label className="block text-xs font-medium text-gray-700 mb-1">Assigned Technician</label><input value={form.assignedTech} onChange={e => setForm({...form, assignedTech: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
+
+      {/* Line items — the actual services + pricing that will drive the
+          invoice when this job is marked completed. */}
+      <div className="pt-2 border-t border-gray-100">
+        <label className="block text-xs font-semibold text-gray-700 mb-2">
+          Services &amp; Pricing
+          <span className="ml-1 text-gray-400 font-normal">— becomes the invoice when job is completed</span>
+        </label>
+        <LineItemsEditor
+          items={form.lineItems}
+          onChange={(lineItems) => setForm({ ...form, lineItems })}
+        />
+      </div>
+
+      <div><label className="block text-xs font-medium text-gray-700 mb-1">Notes</label><textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} rows={2} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none resize-none" /></div>
+    </>
+  )
+}
+
 function NewJobModal({ onClose, onSave }) {
   const [form, setForm] = useState({
     customerName: '',
@@ -248,6 +347,7 @@ function NewJobModal({ onClose, onSave }) {
     scheduledDate: '',
     assignedTech: 'Jimmy Manharth',
     notes: '',
+    lineItems: [],
   })
   const [saving, setSaving] = useState(false)
 
@@ -258,28 +358,49 @@ function NewJobModal({ onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b"><h3 className="font-display font-bold text-lg">New Job</h3><button onClick={onClose}><X size={20} /></button></div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Customer Name is now a searchable picker that will auto-fill
-              phone/email/address and link customerId on match. */}
-          <CustomerPicker form={form} setForm={setForm} />
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Phone</label><input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Email</label><input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-          </div>
-          <div><label className="block text-xs font-medium text-gray-700 mb-1">Address</label><input value={form.address} onChange={e => setForm({...form, address: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Service Type *</label>
-              <select value={form.serviceType} onChange={e => setForm({...form, serviceType: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white focus:border-forest-500 outline-none">
-                {SERVICE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div><label className="block text-xs font-medium text-gray-700 mb-1">Scheduled Date</label><input type="date" value={form.scheduledDate} onChange={e => setForm({...form, scheduledDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-          </div>
-          <div><label className="block text-xs font-medium text-gray-700 mb-1">Assigned Technician</label><input value={form.assignedTech} onChange={e => setForm({...form, assignedTech: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none" /></div>
-          <div><label className="block text-xs font-medium text-gray-700 mb-1">Notes</label><textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} rows={2} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-forest-500 outline-none resize-none" /></div>
+          <JobFormFields form={form} setForm={setForm} showCustomerPicker />
           <button type="submit" disabled={saving} className="w-full btn-primary py-2.5 disabled:opacity-50">{saving ? 'Creating...' : 'Create Job'}</button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function EditJobModal({ job, onClose, onSave }) {
+  const [form, setForm] = useState({
+    customerName: job.customerName || '',
+    address: job.address || '',
+    phone: job.phone || '',
+    email: job.email || '',
+    serviceType: job.serviceType || 'General Pest Control',
+    scheduledDate: job.scheduledDate || '',
+    assignedTech: job.assignedTech || 'Jimmy Manharth',
+    notes: job.notes || '',
+    lineItems: Array.isArray(job.lineItems) ? job.lineItems : [],
+  })
+  const [saving, setSaving] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault(); setSaving(true)
+    await onSave(job.id, form); setSaving(false); onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b">
+          <div>
+            <h3 className="font-display font-bold text-lg">Edit Job</h3>
+            <p className="text-xs text-gray-500">{job.customerName} · {job.serviceType}</p>
+          </div>
+          <button onClick={onClose}><X size={20} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <JobFormFields form={form} setForm={setForm} showCustomerPicker={false} />
+          <button type="submit" disabled={saving} className="w-full btn-primary py-2.5 disabled:opacity-50">{saving ? 'Saving…' : 'Save Changes'}</button>
         </form>
       </div>
     </div>
@@ -290,6 +411,7 @@ export default function AdminJobs() {
   const [jobs, setJobs] = useState([])
   const [invoices, setInvoices] = useState([])
   const [showNew, setShowNew] = useState(false)
+  const [editingJob, setEditingJob] = useState(null)
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
   const [highlightedId, setHighlightedId] = useState(null)
@@ -346,7 +468,19 @@ export default function AdminJobs() {
   }, [highlightedId])
 
   const createJob = async (form) => { await adminFetch('/api/admin/jobs', { method: 'POST', body: JSON.stringify(form) }); fetchJobs() }
-  const updateStatus = async (id, status) => { await adminFetch(`/api/admin/jobs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); fetchJobs() }
+  const updateStatus = async (id, status) => {
+    const res = await adminFetch(`/api/admin/jobs/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+    fetchJobs()
+    // Notify Jimmy when a status change auto-drafted a new invoice from
+    // the job's line items (e.g. transitioning to Completed).
+    if (res?.autoInvoice) {
+      const count = Array.isArray(res.autoInvoice.items) ? res.autoInvoice.items.length : 0
+      setTimeout(() => {
+        alert(`Invoice ${res.autoInvoice.invoiceNumber} drafted with ${count} line ${count === 1 ? 'item' : 'items'} — total $${Number(res.autoInvoice.total).toFixed(2)}.`)
+      }, 100)
+    }
+  }
+  const updateJob = async (id, form) => { await adminFetch(`/api/admin/jobs/${id}`, { method: 'PATCH', body: JSON.stringify(form) }); fetchJobs() }
   const deleteJob = async (id) => { await adminFetch(`/api/admin/jobs/${id}`, { method: 'DELETE' }); fetchJobs() }
   const createInvoice = (job) => { navigate('/admin/invoices', { state: { fromJob: job } }) }
 
@@ -384,6 +518,7 @@ export default function AdminJobs() {
                     onStatusChange={updateStatus}
                     onDelete={deleteJob}
                     onCreateInvoice={createInvoice}
+                    onEdit={setEditingJob}
                     cardRef={job.id === focusId ? focusedRef : undefined}
                     highlight={job.id === highlightedId}
                   />
@@ -395,6 +530,13 @@ export default function AdminJobs() {
       </div>
 
       {showNew && <NewJobModal onClose={() => setShowNew(false)} onSave={createJob} />}
+      {editingJob && (
+        <EditJobModal
+          job={editingJob}
+          onClose={() => setEditingJob(null)}
+          onSave={updateJob}
+        />
+      )}
     </AdminLayout>
   )
 }

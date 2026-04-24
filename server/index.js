@@ -239,12 +239,38 @@ app.delete('/api/admin/leads/:id', auth, (req, res) => {
 // ===================
 // JOBS API
 // ===================
+
+// Normalize an incoming line items array into the canonical shape used on
+// jobs and invoices: { description, quantity, rate, serviceId? }. Silently
+// drops any rows that are completely empty (so an extra blank row in the
+// UI editor doesn't get persisted).
+function sanitizeLineItems(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const raw of items) {
+    if (!raw) continue;
+    const description = String(raw.description || '').trim();
+    const quantity = Number(raw.quantity);
+    const rate = Number(raw.rate);
+    // Skip fully-blank rows — lets the UI keep an empty placeholder row.
+    if (!description && !Number.isFinite(quantity) && !Number.isFinite(rate)) continue;
+    if (!description) continue; // description is required once there's any data
+    out.push({
+      description,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      rate: Number.isFinite(rate) && rate >= 0 ? Math.round(rate * 100) / 100 : 0,
+      serviceId: raw.serviceId || null,
+    });
+  }
+  return out;
+}
+
 app.get('/api/admin/jobs', auth, (req, res) => {
   res.json({ jobs: jobsRepo.all() });
 });
 
 app.post('/api/admin/jobs', auth, (req, res) => {
-  const { customerName, address, phone, email, serviceType, scheduledDate, assignedTech, notes, status, customerId: providedCustomerId } = req.body;
+  const { customerName, address, phone, email, serviceType, scheduledDate, assignedTech, notes, status, customerId: providedCustomerId, lineItems } = req.body;
   if (!customerName || !serviceType) return res.status(400).json({ error: 'Customer name and service type required' });
 
   const actor = actorFromReq(req);
@@ -278,6 +304,7 @@ app.post('/api/admin/jobs', auth, (req, res) => {
       assignedTech: assignedTech || 'Jimmy Manharth',
       notes: notes || '',
       status: status || 'new',
+      lineItems: sanitizeLineItems(lineItems),
       leadId: null,
       customerId,
       contactId,
@@ -311,6 +338,7 @@ app.patch('/api/admin/jobs/:id', auth, (req, res) => {
   const fields = ['customerName', 'address', 'phone', 'email', 'serviceType', 'scheduledDate', 'assignedTech', 'notes', 'status'];
   const patch = {};
   fields.forEach(f => { if (req.body[f] !== undefined) patch[f] = req.body[f]; });
+  if (req.body.lineItems !== undefined) patch.lineItems = sanitizeLineItems(req.body.lineItems);
 
   const actor = actorFromReq(req);
   const updated = jobsRepo.update(req.params.id, patch, { actor });
@@ -460,14 +488,15 @@ function findInvoiceByJobId(jobId) {
   return invoicesRepo.all().find(i => i.jobId === jobId) || null;
 }
 
-// Phase 1.1 — Auto-draft a blank invoice from a completed job. Returns the
-// newly-created invoice, or the existing one if a match for this jobId is
-// already in the system (never creates duplicates).
+// Phase 1.1 + Commit 2 — Auto-draft an invoice from a completed job.
+// Returns the newly-created invoice, or the existing one if a match for
+// this jobId is already in the system (never creates duplicates).
 //
 // The draft has:
 //   - customer fields inherited from the job
-//   - a single line item using the service type as the description (rate 0,
-//     qty 1 — Phase 2 will introduce a Services catalog with real prices)
+//   - line items copied from job.lineItems if the job has any; otherwise
+//     a single zero-rate placeholder using the serviceType as the
+//     description (keeps legacy jobs that predate line items working)
 //   - status = 'draft'
 //   - due date = today + 30 days
 //   - jobId back-reference for "View Invoice" links
@@ -475,7 +504,15 @@ function autoDraftInvoiceForJob(job, actor) {
   const existing = findInvoiceByJobId(job.id);
   if (existing) return existing;
 
-  const items = [{ description: job.serviceType || 'Service', quantity: 1, rate: 0 }];
+  const jobItems = Array.isArray(job.lineItems) ? job.lineItems : [];
+  const items = jobItems.length > 0
+    ? jobItems.map(li => ({
+        description: li.description,
+        quantity: Number(li.quantity) || 1,
+        rate: Number(li.rate) || 0,
+        serviceId: li.serviceId || null,
+      }))
+    : [{ description: job.serviceType || 'Service', quantity: 1, rate: 0 }];
   const { subtotal, tax, total } = computeInvoiceTotals(items);
   const invoiceNumber = nextInvoiceNumber();
 
@@ -504,7 +541,9 @@ function autoDraftInvoiceForJob(job, actor) {
     },
     {
       actor: actor || 'system',
-      description: `Auto-drafted invoice ${invoiceNumber} from completed job (${job.serviceType}) for ${job.customerName}`,
+      description: jobItems.length > 0
+        ? `Auto-drafted invoice ${invoiceNumber} with ${jobItems.length} line ${jobItems.length === 1 ? 'item' : 'items'} from completed job (${job.serviceType}) for ${job.customerName} — total $${total.toFixed(2)}`
+        : `Auto-drafted invoice ${invoiceNumber} from completed job (${job.serviceType}) for ${job.customerName}`,
     }
   );
 }
