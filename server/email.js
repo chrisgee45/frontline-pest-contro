@@ -21,7 +21,7 @@ function getTransporter() {
 }
 
 async function sendLeadNotification(lead) {
-  const notifyEmail = process.env.NOTIFY_EMAIL || 'jmanharth@gmail.com';
+  const notifyEmail = process.env.NOTIFY_EMAIL || 'frontlinepestokc@gmail.com';
   const transporter = getTransporter();
 
   const subject = `New Lead: ${lead.name} — ${lead.service || 'General'}`;
